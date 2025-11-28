@@ -7,5 +7,6 @@ const int siz=1e4+15;
 int main(){
     int n;
     cin>>n;
-    
+    cout<<n<<endl;
+    return 0;
 }
