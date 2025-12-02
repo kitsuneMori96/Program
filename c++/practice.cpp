@@ -7405,4 +7405,63 @@ int main(){
     return 0;
 }
 
+int fan(int n){
+    if(n==1) return 10;
+    else return fan(n-1)+2;
+}
+
+int main(){
+    int t=2;
+    while(t--){
+        int n;
+        cin>>n;
+        cout<<fan(n)<<endl;
+    }
+}
+
+double sum(double n){
+    double res=0;
+    for(int i=1;i<=n;i++) res+=1.0/(i*(i+1));
+    return res;
+}
+
+int main(){
+    double n;
+    cin>>n;
+    cout<<sum(n)<<endl;
+    return 0;
+}
+
+
+bool fan(ll x){
+    if(x<=3) return x>1;
+    if(x%6!=1&&x%6!=5) return false;
+    ll a=sqrt(x);
+    for(ll i=5;i<=a;i+=6) if(x%i==0||x%(i+2)==0) return false;
+    return true;
+}
+
+int main(){
+    int t=2;
+    while(t--){
+        int n;
+        cin>>n;
+        cout<<fan(n)<<endl;
+    }
+    return 0;
+}
+
+
+int gcd(int x,int y){
+    if(y==0) return x;
+    return gcd(y,x%y);
+}
+
+int main(){
+    int n,m;
+    cin>>n>>m;
+    cout<<gcd(n,m)<<endl;
+    return 0;
+}
+
 */
