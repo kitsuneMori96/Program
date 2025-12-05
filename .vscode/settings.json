@@ -97,5 +97,9 @@
         "typeinfo": "cpp",
         "valarray": "cpp",
         "variant": "cpp"
-    }
+    },
+    "java.project.sourcePaths": [
+        "."
+    ],
+    "java.project.referencedLibraries": []
 }
