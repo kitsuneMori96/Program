@@ -1,0 +1,18 @@
+{
+    "files.associations": {
+        "*.cpp": "cpp",
+        "iostream": "cpp",
+        "vector": "cpp",
+        "map": "cpp",
+        "cstdio": "cpp",
+        "istream": "cpp",
+        "ostream": "cpp",
+        "fstream": "cpp",
+        "random": "cpp",
+        "cmath": "cpp",
+        "stdio.h": "c",
+        "initializer_list": "cpp",
+        "iomanip": "cpp",
+        "algorithm": "cpp"
+    }
+}
