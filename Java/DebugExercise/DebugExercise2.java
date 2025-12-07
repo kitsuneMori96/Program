@@ -1,4 +1,4 @@
-package Java;
+package Java.DebugExercise;
 
 /**
  * Exercise to showcase the step over button.
