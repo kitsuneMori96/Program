@@ -22,6 +22,18 @@ class intlist{
         }
         return i;
     }
+    public int get(int i){
+        int n=0;
+        intlist p=this;
+        while(p!=null){
+            if(n==i){
+                return p.value;
+            }
+            n++;
+            p=p.next;
+        }
+        return -1;  
+    }
 }
 
 public class Main{
@@ -29,5 +41,8 @@ public class Main{
         intlist l=new intlist(15,null);
         l=new intlist(10,l);
         l=new intlist(5,l);
+        System.out.println(l.size());
+        System.out.println(l.iterationsize());
+        System.out.println(l.get(2));
     }
 }
