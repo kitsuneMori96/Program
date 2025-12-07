@@ -1,29 +1,33 @@
 package Java;
-// 1. 定义类
-class Person {
-    // 2. 定义属性（成员变量）
-    String name;
-    int age;
 
-    // 3. 定义构造方法
-    public Person(String personName, int personAge) {
-        name = personName;
-        age = personAge;
+class intlist{
+    int value;
+    intlist next;
+    public intlist(int v,intlist n){
+        value=v;
+        next=n;
     }
-
-    // 4. 定义成员方法
-    public void introduce() {
-        System.out.println("Hello, my name is " + name + " and I am " + age + " years old.");
+    public int size(){
+        if(this.next==null){
+            return 1;
+        }
+        else return 1+this.next.size();
+    }
+    public int iterationsize(){
+        int i=0;
+        intlist p=this;
+        while(p!=null){
+            i++;
+            p=p.next;
+        }
+        return i;
     }
 }
 
-// 使用类
-public class Main {
-    public static void main(String[] args) {
-        // 5. 实例化对象（创建对象）
-        Person person1 = new Person("Alice", 25);
-
-        // 6. 访问对象的方法
-        person1.introduce(); // 输出: Hello, my name is Alice and I am 25 years old.
+public class Main{
+    public static void main(String[] args){
+        intlist l=new intlist(15,null);
+        l=new intlist(10,l);
+        l=new intlist(5,l);
     }
 }
