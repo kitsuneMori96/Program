@@ -125,5 +125,23 @@ public class Main{
     }
 }
 
+public class Main {
+    
+    public static int fib(int n){
+        int x1=0,x2=1,x3=1;
+        if(n<2) return n>1?1:0;
+        for(int i=2;i<n;i++){
+            x3=x1+x2;
+            x1=x2;
+            x2=x3;
+        }
+        return x3;
+    }
+
+    public static void main(String[] args) {
+        int[] num=new int[]{1,2,3,4,5,6,7,8,9,10};
+        for(int it:num) System.out.println(fib(it));
+    }
+}
 
 */
