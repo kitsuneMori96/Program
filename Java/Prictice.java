@@ -144,4 +144,209 @@ public class Main {
     }
 }
 
+
+public class SLList {
+    private IntNode first;
+
+    public SLList(int x) {
+        first = new IntNode(x, null);
+    }
+
+    public void addFirst(int x) {
+        first = new IntNode(x, first);
+    }
+
+    public int getFirst() {
+        return first.item;
+    }
+
+    public void addLast(int x) {
+    IntNode p = first;
+
+    while (p.next != null) {
+        p = p.next;
+    }
+        p.next = new IntNode(x, null);
+    }
+
+    public int sizeiteration(SLList list){
+        int size=0;
+        IntNode p=first;
+        while(p!=null){
+            size++;
+            p=p.next;
+        }
+        return size;
+    }
+
+    private static int sizerecuesive(IntNode p) {
+        if (p.next == null) {
+            return 1;
+        }
+
+        return 1 + sizerecuesive(p.next);
+    }
+
+    public int size(SLList list){
+        return sizerecuesive(first);
+    }
+    
+}
+
+
+public class SLList {
+    public class IntNode {
+        public int item;
+        public IntNode next;
+        public IntNode(int i, IntNode n) {
+            item = i;
+            next = n;
+        }
+    }
+
+    private IntNode first; 
+    private IntNode last; 
+    private int size;
+
+    public SLList() {
+        first = null;
+        size = 0;
+    }
+
+    public SLList(int x) {
+        first = new IntNode(x, null);
+        size = 1;
+    }
+
+    // Adds an item to the front of the list. 
+    public void addFirst(int x) {
+        first = new IntNode(x, first);
+        size += 1;
+    }    
+
+    // Retrieves the front item from the list.
+    public int getFirst() {
+        return first.item;
+    }
+
+    // Returns the number of items in the list.
+    public int size() {
+        return size;
+    }
+
+    // Adds an item to the end of the list.
+    public void addLast(int x) {
+        if (first == null){
+            first = new IntNode(x, null);
+            size=1;
+            return;
+        }
+        last.next = new IntNode(x, null);
+        last = last.next;
+        size += 1;
+    }
+
+    // Crashes when you call addLast on an empty SLList. Fix it.
+    public static void main(String[] args) {
+        SLList x = new SLList();
+        x.addLast(10);
+        System.out.println(x.getFirst());
+        System.out.println(x.size());
+    }
+}
+
+
+public class SLList {
+    private IntNode first;
+    private IntNode last;
+    private int size;
+
+    public SLList(int x) {
+        first = new IntNode(x, null);
+        last = first;
+        size=1;
+    }
+
+    public SLList() {
+        first = null;
+        last = null;
+        size = 0;
+    }
+
+    public void addFirst(int x) {
+        if(first==null){
+            first=new IntNode(x,null);
+            first.prev=null;
+            last=first;
+            size++;
+            return;
+        }
+        else{
+            IntNode temp=first;
+            first=new IntNode(x,first);
+            temp.prev=first;
+            size++;
+        }
+        
+    }
+
+    public int getFirst() {
+        return first.item;
+    }
+
+    public int getLast() {
+        return last.item;
+    }
+
+    public void addLast(int x){
+        last.next = new IntNode(x, null);
+        IntNode temp=last;
+        last = last.next;
+        last.prev=temp;
+        size++;
+    }
+
+    public int sizeiteration(SLList list){
+        int size=0;
+        IntNode p=first;
+        while(p!=null){
+            size++;
+            p=p.next;
+        }
+        return size;
+    }
+
+    private static int sizerecuesive(IntNode p) {
+        if (p.next == null) {
+            return 1;
+        }
+
+        return 1 + sizerecuesive(p.next);
+    }
+
+    public int size(SLList list){
+        return sizerecuesive(first);
+    }
+    
+    public void removelast(){
+        if(first==null) return;
+        last.prev.next=null;
+        last=last.prev;
+        size--;
+    }
+
+    public static void main(String[] args) {
+        SLList list=new SLList(10);
+        list.addFirst(20);
+        list.addLast(30);
+        list.addLast(40);
+        list.removelast();
+        list.addLast(50);
+        list.removelast();
+        System.out.println(list.getFirst());
+        System.out.println(list.getLast());
+        System.out.println(list.size(list));
+    }
+}
+
 */
