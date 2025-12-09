@@ -7464,4 +7464,64 @@ int main(){
     return 0;
 }
 
+
+int main(){
+    int n=10;
+    int a[10];
+    for(int i=0;i<n;i++) cin>>a[i];
+    for(int i=0;i<n;i++) cout<<a[i]<<" ";
+    cout<<endl;
+    sort(a,a+n);
+    for(int i=0;i<n;i++) cout<<a[i]<<" ";
+    cout<<endl;
+    return 0;
+}
+
+
+int main(){
+    int n=10;
+    int a[n];
+    for(int i=0;i<n;i++) cin>>a[i];
+    sort(a,a+n);
+    double sum=0;
+    for(int i=1;i<n-1;i++){
+        sum+=a[i];
+    }
+    cout<<sum/8<<endl;
+    return 0;
+}
+
+
+#define N 5
+
+int fun(int a[][N], int n)
+{
+    for(int i=0;i<N;i++) for(int j=0;j<=i;j++) a[i][j]*=n;
+    return 0;
+}
+
+int main()
+{
+    int a[N][N], n, i, j;
+    printf("****** The array *******\n");
+    for (i = 0; i < N; i++)
+    {
+        for (j = 0; j < N; j++)
+        {
+            a[i][j] = rand() % 10; printf("%4d", a[i][j]);
+        }
+        printf("\n");
+    }
+    do n = rand() % 10; while (n >= 3);
+    printf("n = %4d\n", n);
+    fun(a, n);
+    printf("******** THE RESULT ********\n");
+    for (i = 0; i < N; i++)
+    {
+        for (j = 0; j < N; j++) printf("%4d", a[i][j]);
+        printf("\n");
+    }
+    return 0;
+}
+
 */
