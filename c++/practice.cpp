@@ -7554,4 +7554,47 @@ int main()
     return 0;
 }
 
+
+int main() {
+    char text[5][100];
+    int capital[5] = {0}; 
+    int lower[5] = {0};   
+    int number[5] = {0};  
+    int space[5] = {0};   
+    int other[5] = {0};   
+    printf("请输入5行文字：\n");
+    for (int i = 0; i < 5; i++) {
+        printf("第%d行: ", i + 1);
+        fgets(text[i], sizeof(text[i]), stdin);
+    }
+    
+    for (int i = 0; i < 5; i++) {
+        for (int j = 0; text[i][j] != '\0'; j++) {
+            char c = text[i][j];
+            if (isupper(c)) capital[i]++;
+            else if (islower(c)) lower[i]++;
+            else if (isdigit(c)) number[i]++;
+            else if (c == ' ') space[i]++;
+            else if (c != '\n' && c != '\r') other[i]++;
+        }
+    }
+
+    printf("\n各行字符统计结果：\n");
+    for (int i = 0; i < 5; i++) {
+        printf("第%d行: 大写字母=%d, 小写字母=%d, 数字=%d, 空格=%d, 其他=%d\n", 
+               i + 1, capital[i], lower[i], number[i], space[i], other[i]);
+    }
+    return 0;
+}
+
+
+int main(){
+    int n=1;
+    string s;
+    getline(cin, s);
+    for(int i=0;i<s.length();i++) if(s[i]==' ') n++;
+    cout<<n<<endl;
+    return 0;
+}
+
 */
