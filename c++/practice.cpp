@@ -7524,4 +7524,34 @@ int main()
     return 0;
 }
 
+
+int fun(int score[], int m, int below[])
+{
+    int sum = 0;
+    for(int i = 0; i < m; i++) {
+        sum += score[i];
+    }
+    double avg = (double)sum / m;
+    int i = 0, j = 0;
+    for(; i < m; i++) {
+        if(score[i] < avg) {
+            below[j++] = score[i];
+        }
+    }
+    return j;
+}
+
+int main()
+{
+    int score[] = {10, 20, 30, 40, 50, 60, 70, 80, 90};
+    int below[9];
+    int n = fun(score, 9, below);
+    printf("低于平均分的人数: %d\n", n);
+    printf("低于平均分的成绩: ");
+    for (int i = 0; i < n; i++)
+        printf("%d ", below[i]);
+    printf("\n");
+    return 0;
+}
+
 */
