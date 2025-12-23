@@ -7655,4 +7655,95 @@ int main() {
     return 0;
 }
 
+void fun(char *s,char t[ ])
+{
+    int i=0, j=0;
+    while(s[i] != '\0'){
+        if(s[i] % 2 != 0){
+            t[j] = s[i];
+            j++;
+        }
+        i++;
+    }
+    t[j] ='\0'; 
+}
+
+int main()
+{
+    char s[100], t[100];
+    printf("\nPlease enter string S：");
+    scanf("%s", s);
+    fun(s, t);
+    printf("\n%s", t);
+    return 0;
+}
+
+
+int main(){
+    int a[10]={0,1,2,3,4,5,6,7,8,9};
+    int b[10];
+    for(int i=0,j=9;i<10;i++,j--){
+        b[i]=a[j];
+    }
+    for(int i=0;i<10;i++){
+        cout<<b[i]<<" ";
+    }
+    return 0;
+}
+
+
+int main(){
+    int a[4][5];
+    for(int i=0;i<4;i++){
+        for(int j=0;j<5;j++) cin>>a[i][j];
+    }
+    int max=INT32_MIN;
+    int maxi=-1;
+    int maxj=-1;
+    for(int i=0;i<4;i++){
+        for(int j=0;j<5;j++){
+            if(a[i][j]>max){
+                max=a[i][j];
+                maxi=i;
+                maxj=j;
+            }
+        }   
+    }
+    cout<<max<<"最大"<<maxi+1<<"行"<<maxj+1<<"列"<<endl;
+}
+
+
+#define N 80
+
+int fun(char *str) {
+    int i = 0, j = 0;
+    
+    while (str[j] != '\0') j++;
+    j--;
+    
+    while (i < j) {
+        if (str[i] != str[j]) return 0;  
+        i++;
+        j--;
+    }
+    return 1;
+}
+
+int main() {
+    char s[N];
+    
+    printf("Enter a string: ");
+    gets(s);
+    
+    printf("\n\n");
+    puts(s);
+    
+    if (fun(s)) {
+        printf("YES\n");
+    } else {
+        printf("NO\n");
+    }
+    return 0;
+}
+
 */
