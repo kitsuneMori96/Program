@@ -500,7 +500,7 @@ class MainWindow(QMainWindow):
         h3.addWidget(QLabel("视频帧率:"))
         self.fps_spin = QComboBox()
         self.fps_spin.addItems(["1", "5", "10", "15", "24", "25", "30", "50", "60"])
-        self.fps_spin.setCurrentText("24")
+        self.fps_spin.setCurrentText("1")
         h3.addWidget(self.fps_spin)
         h3.addStretch()
         gv.addLayout(h3)
