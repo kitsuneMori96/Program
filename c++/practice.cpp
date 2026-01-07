@@ -7746,4 +7746,23 @@ int main() {
     return 0;
 }
 
+
+int gcd (int a, int b){
+    return b==0 ? a : gcd (b,a%b);
+} 
+
+int isPrime(int x){
+    if(x<2) return 0;
+    if(x==2) return 1;
+    int limit = sqrt(x);
+    for(int i=2;i<=limit;i++) if(x%i==0) return 0;
+    return 1;
+}
+
+int main(){
+    cout<<gcd(12,24)<<endl;
+    cout<<isPrime(17)<<endl;
+    return 0;
+}
+
 */
