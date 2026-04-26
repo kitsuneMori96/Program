@@ -33,6 +33,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap
 
 CONFIG_PATH = Path.home() / ".flac_to_mkv_config.json"
+DEFAULT_OUTPUT_DIR = Path(r"D:\Video\目标文件夹")
 
 # -------------------------
 # Utilities
@@ -162,7 +163,8 @@ class Worker(QThread):
     def __init__(self, image_path, folder_path, output_dir, file_types, 
                  ffmpeg_path=None, ffprobe_path=None, fps=24, 
                  sample_rate=48000, bit_depth=24,
-                 gpu_type="cpu", video_codec="h264", preset="medium"):
+                 gpu_type="cpu", video_codec="h264", preset="medium",
+                 auto_jpg_to_png_fallback=True):
         super().__init__()
         self.image_path = Path(image_path).resolve()
         self.folder_path = Path(folder_path).resolve()
@@ -176,6 +178,7 @@ class Worker(QThread):
         self.gpu_type = gpu_type
         self.video_codec = video_codec
         self.preset = preset
+        self.auto_jpg_to_png_fallback = auto_jpg_to_png_fallback
         
     def _log(self, s):
         self.log.emit(s)
@@ -216,10 +219,9 @@ class Worker(QThread):
             self.ffmpeg, '-y',
             '-hide_banner', '-loglevel', 'error',
         ]
-        
-        # 添加GPU加速参数
-        if self.gpu_type != "cpu" and extra_params:
-            cmd.extend(extra_params)
+
+        # 静态图片输入（尤其 jpg/jpeg）在部分环境下配合 -hwaccel 会失败；
+        # 这里统一使用软件解码图片，仅使用 GPU 编码器进行编码。
         
         # 添加输入参数
         cmd.extend([
@@ -347,22 +349,52 @@ class Worker(QThread):
                         rc2, outb2, errb2 = run_quiet(cmd_video, capture=True)
                         err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
                         self._log(f"  生成视频失败 stderr 摘要:\n{err.strip()[:2000]}")
-                        
-                        # 如果GPU编码失败，尝试回退到CPU编码
-                        if self.gpu_type != "cpu":
-                            self._log("  GPU编码失败，尝试回退到CPU编码...")
-                            cpu_encoder, _ = self._get_gpu_encoder_settings()
-                            cpu_encoder = GPU_ENCODERS["cpu"].get(self.video_codec, "libx264")
-                            cmd_video_cpu = self._build_video_command(
-                                self.image_path, temp_video, duration, cpu_encoder, []
-                            )
-                            rc2, _, _ = run_quiet(cmd_video_cpu, capture=False)
-                            if rc2 == 0 and temp_video.exists():
-                                self._log("  CPU编码成功")
+
+                        # 可选兜底：JPG/JPEG 失败时，先转临时 PNG 再重试
+                        image_for_retry = self.image_path
+                        if (
+                            self.auto_jpg_to_png_fallback
+                            and self.image_path.suffix.lower() in {".jpg", ".jpeg"}
+                        ):
+                            temp_png = td / (self.image_path.stem + "_fallback.png")
+                            self._log("  检测到 JPG/JPEG，尝试转为临时 PNG 后重试...")
+                            cmd_to_png = [
+                                self.ffmpeg, '-y',
+                                '-hide_banner', '-loglevel', 'error',
+                                '-i', str(self.image_path),
+                                '-frames:v', '1',
+                                str(temp_png)
+                            ]
+                            rc_png, _, _ = run_quiet(cmd_to_png, capture=False)
+                            if rc_png == 0 and temp_png.exists():
+                                image_for_retry = temp_png
+                                cmd_video = self._build_video_command(
+                                    image_for_retry, temp_video, duration, encoder, extra_params
+                                )
+                                rc_retry, _, _ = run_quiet(cmd_video, capture=False)
+                                if rc_retry == 0 and temp_video.exists():
+                                    self._log("  JPG->PNG 兜底重试成功")
+                                else:
+                                    self._log("  JPG->PNG 兜底重试失败")
+                            else:
+                                self._log("  JPG->PNG 转换失败，跳过此兜底流程")
+
+                        # 如果仍失败且当前在用GPU编码，尝试回退到CPU编码
+                        if not temp_video.exists():
+                            if self.gpu_type != "cpu":
+                                self._log("  GPU编码失败，尝试回退到CPU编码...")
+                                cpu_encoder, _ = self._get_gpu_encoder_settings()
+                                cpu_encoder = GPU_ENCODERS["cpu"].get(self.video_codec, "libx264")
+                                cmd_video_cpu = self._build_video_command(
+                                    image_for_retry, temp_video, duration, cpu_encoder, []
+                                )
+                                rc2, _, _ = run_quiet(cmd_video_cpu, capture=False)
+                                if rc2 == 0 and temp_video.exists():
+                                    self._log("  CPU编码成功")
+                                else:
+                                    continue
                             else:
                                 continue
-                        else:
-                            continue
                     self._log("  静态视频生成成功")
 
                     # 3) 混合视频 + 音频到MKV
@@ -417,10 +449,11 @@ class MainWindow(QMainWindow):
         self.gpu_type = cfg.get('gpu_type', 'cpu')
         self.video_codec = cfg.get('video_codec', 'h264')
         self.preset = cfg.get('preset', 'medium')
+        self.auto_jpg_to_png_fallback = cfg.get('auto_jpg_to_png_fallback', True)
 
         self.image_path = ""
         self.folder_path = ""
-        self.output_dir = ""
+        self.output_dir = str(DEFAULT_OUTPUT_DIR)
         self.gpu_capabilities = {"cpu": True}  # 默认只有CPU可用
 
         self.init_ui()
@@ -556,6 +589,10 @@ class MainWindow(QMainWindow):
         gli.addWidget(btn_img); gli.addWidget(self.lbl_img); gli.addStretch()
         gb_img.setLayout(gli)
         v.addWidget(gb_img)
+
+        self.jpg_fallback_check = QCheckBox("JPG失败时自动转临时PNG再重试")
+        self.jpg_fallback_check.setChecked(self.auto_jpg_to_png_fallback)
+        v.addWidget(self.jpg_fallback_check)
         
         self.preview = QLabel()
         self.preview.setFixedSize(360, 220)
@@ -577,7 +614,7 @@ class MainWindow(QMainWindow):
         glo = QHBoxLayout()
         btn_out = QPushButton("选择输出目录")
         btn_out.clicked.connect(self.choose_output)
-        self.lbl_out = QLabel("未选择（默认：./output）")
+        self.lbl_out = QLabel(self.output_dir)
         glo.addWidget(btn_out); glo.addWidget(self.lbl_out); glo.addStretch()
         gb_out.setLayout(glo)
         v.addWidget(gb_out)
@@ -736,9 +773,9 @@ class MainWindow(QMainWindow):
             return
             
         if not getattr(self, 'output_dir', ''):
-            self.output_dir = str(Path.cwd() / "output")
-            Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-            self.lbl_out.setText(self.output_dir)
+            self.output_dir = str(DEFAULT_OUTPUT_DIR)
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        self.lbl_out.setText(self.output_dir)
 
         ffmpeg_bin = self.user_ffmpeg or which_bin('ffmpeg')
         ffprobe_bin = self.user_ffprobe or which_bin('ffprobe')
@@ -752,6 +789,7 @@ class MainWindow(QMainWindow):
         cfg['gpu_type'] = self.gpu_type
         cfg['video_codec'] = self.video_codec
         cfg['preset'] = self.preset_combo.currentText()
+        cfg['auto_jpg_to_png_fallback'] = self.jpg_fallback_check.isChecked()
         save_config(cfg)
         
         # 显示处理信息
@@ -760,6 +798,7 @@ class MainWindow(QMainWindow):
         self.log(f"GPU加速: {self.gpu_type.upper()}")
         self.log(f"视频编码: {self.video_codec.upper()}")
         self.log(f"编码预设: {self.preset_combo.currentText()}")
+        self.log(f"JPG失败兜底转PNG: {'开启' if self.jpg_fallback_check.isChecked() else '关闭'}")
         self.log(f"采样率: {self.sample_rate_combo.currentText()} Hz")
         self.log(f"位深度: {self.bit_depth_combo.currentText()} bit")
         self.log(f"帧率: {self.fps_spin.currentText()} fps")
@@ -780,7 +819,8 @@ class MainWindow(QMainWindow):
             bit_depth=int(self.bit_depth_combo.currentText()),
             gpu_type=self.gpu_type,
             video_codec=self.video_codec,
-            preset=self.preset_combo.currentText()
+            preset=self.preset_combo.currentText(),
+            auto_jpg_to_png_fallback=self.jpg_fallback_check.isChecked()
         )
         self.worker.log.connect(self.log)
         self.worker.progress.connect(self.progress.setValue)
