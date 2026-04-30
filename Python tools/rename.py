@@ -44,7 +44,7 @@ def batch_rename_images(folder_path, prefix):
         new_filename = f"{prefix} {file_num}.jpg"
         new_path = os.path.join(folder_path, new_filename)
 
-        # 冲突检测
+        # 冲突检测：检查目标文件是否已存在
         if os.path.exists(new_path):
             conflict_files.append((filename, new_filename))
             skip_count += 1
@@ -66,8 +66,8 @@ def batch_rename_images(folder_path, prefix):
     # 处理命名冲突
     if conflict_files:
         print("\n⚠ 检测到文件名冲突：")
-        for old, new in conflict_files:
-            print(f" - 目标文件已存在：{new}")
+        for _, new_filename in conflict_files:
+            print(f" - 目标文件已存在：{new_filename}")
         print("已跳过这些文件，请手动处理")
 
     # 输出统计报告
