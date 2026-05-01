@@ -103,7 +103,7 @@ class YandeSpider:
                 else:
                     print(f"  [HTTP {resp.status_code}] {url}")
             except requests.RequestException as e:
-                print(f"  [请求失败] {e} (尝试 {attempt}/{max_retries})")
+                print(f"  [{type(e).__name__}] 重试 {attempt}/{max_retries}")
             if attempt < max_retries:
                 self._throttle()
         return None
@@ -118,7 +118,7 @@ class YandeSpider:
                 if resp.status_code != 200:
                     if attempt < max_retries:
                         wait = 5 * attempt
-                        print(f"  [重试 {attempt}/{max_retries}] HTTP {resp.status_code}，等待 {wait}s...")
+                        print(f"  [HTTP {resp.status_code}] 重试 {attempt}/{max_retries}，{wait}s...")
                         time.sleep(wait)
                         continue
                     return False, f"HTTP {resp.status_code}"
@@ -137,7 +137,7 @@ class YandeSpider:
                 filepath.unlink(missing_ok=True)
                 if attempt < max_retries:
                     wait = 10 * attempt
-                    print(f"  [重试 {attempt}/{max_retries}] 网络错误: {e}，{wait}s 后重试...")
+                    print(f"  [{type(e).__name__}] 重试 {attempt}/{max_retries}，{wait}s...")
                     time.sleep(wait)
                     continue
                 return False, str(e)
@@ -146,7 +146,7 @@ class YandeSpider:
                 filepath.unlink(missing_ok=True)
                 if attempt < max_retries:
                     wait = 5 * attempt
-                    print(f"  [重试 {attempt}/{max_retries}] {e}，{wait}s 后重试...")
+                    print(f"  [{type(e).__name__}] 重试 {attempt}/{max_retries}，{wait}s...")
                     time.sleep(wait)
                     continue
                 return False, str(e)
@@ -158,7 +158,7 @@ class YandeSpider:
             try:
                 with open(self.resume_file) as f:
                     self.state = json.load(f)
-                print(f"[续传] 已下载 {self.state['success']} 张，失败 {len(self.state['failed'])} 张")
+                print(f"[续传] 已有 {self.state['success']} 张，失败 {len(self.state['failed'])} 张")
             except Exception:
                 self.state = {"downloaded": [], "failed": [], "total": 0, "success": 0}
 
@@ -194,9 +194,9 @@ class YandeSpider:
         """下载帖子列表"""
         total = len(posts)
         self.state["total"] = total
-        print(f"\n{'='*50}")
+        print(f"\n{'─'*40}")
         print(f"{description} — 共 {total} 个资源")
-        print(f"{'='*50}")
+        print(f"{'─'*40}")
 
         for post in tqdm(posts, desc="下载进度", unit="张"):
             pid = post["id"]
@@ -218,7 +218,7 @@ class YandeSpider:
                 self.state["downloaded"].append(str(pid))
             else:
                 self.state["failed"].append({"id": pid, "url": url, "reason": err})
-                tqdm.write(f"  [失败] [{pid}] 下载失败: {err}")
+                tqdm.write(f"  [失败] [{pid}] {err}")
 
             # 每张下载后保存一次续传状态
             self._save_resume()
@@ -226,16 +226,16 @@ class YandeSpider:
         self._print_report()
 
     def _print_report(self):
-        print(f"\n{'='*50}")
-        print(f"完成！成功: {self.state['success']}/{self.state['total']}")
+        print(f"\n{'─'*40}")
+        print(f"完成  成功: {self.state['success']}/{self.state['total']}")
         if self.state["failed"]:
             print(f"失败: {len(self.state['failed'])} 张")
             log_path = self.output_dir / "failed.log"
             with open(log_path, "w") as f:
                 for item in self.state["failed"]:
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
-            print(f"失败日志: {log_path}")
-        print(f"{'='*50}\n")
+            print(f"日志: {log_path}")
+        print(f"{'─'*40}\n")
 
     # ── 业务方法 ──────────────────────────────────────
 
@@ -378,10 +378,10 @@ class YandeSpider:
                 success_count += 1
                 tqdm.write(f"  [成功] [{pid}] 下载完成")
             else:
-                tqdm.write(f"  [失败] [{pid}] 重试仍失败: {err}")
+                tqdm.write(f"  [失败] [{pid}] {err}")
 
         print(f"\n重试完成: 成功 {success_count}/{len(failed_items)}")
-        print(f"{'='*50}\n")
+        print(f"{'─'*40}\n")
 
 
 # ── CLI ────────────────────────────────────────────────
