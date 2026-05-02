@@ -13,6 +13,8 @@ yande.re 通用爬虫
     python yande_spider.py pool 99363 --mode jpeg  # 下载 JPEG 版（保留元数据/EXIF）
     #如果有些文件因网络问题失败，重试
     python yande_spider.py retry-failed D:/储存/图片/pool_99363_Lump_of_Sugar_...
+    # 下载画集 99363 中所有包含标签 mito_mashiro 的图片
+    python yande_spider.py pool-filter 99363 "mito_mashiro"
 """
 
 import argparse
@@ -274,6 +276,57 @@ class YandeSpider:
         )
         spider.download_posts(posts, description=data.get("name", f"Pool {pool_id}"))
 
+    def scrape_pool_with_filter(self, pool_id, filter_tags, mode=None):
+        """
+        混合搜索：在画集中按标签过滤图片
+        1. 获取画集所有帖子
+        2. 按标签关键词过滤（大小写不敏感，所有关键词都要匹配）
+        3. 下载匹配的帖子
+        """
+        print(f"\n混合搜索: pool {pool_id} 中过滤标签 '{filter_tags}'")
+        data = self._get_json(f"/pool/show/{pool_id}.json")
+        if not data:
+            print("画集不存在或请求失败")
+            return
+
+        all_posts = data.get("posts", [])
+        if not all_posts:
+            print("画集为空")
+            return
+
+        keywords = [k.lower() for k in filter_tags.split()]
+
+        filtered = []
+        for p in all_posts:
+            post_tags = p.get("tags", "").lower()
+            if all(k in post_tags for k in keywords):
+                filtered.append(p)
+
+        if not filtered:
+            print(f"未找到包含 '{filter_tags}' 的帖子 (共 {len(all_posts)} 张，均不匹配)")
+            return
+
+        print(f"匹配 {len(filtered)}/{len(all_posts)} 张")
+
+        if mode:
+            for p in filtered:
+                p["mode"] = mode
+
+        pool_name = data.get("name", str(pool_id))
+        tag_slug = filter_tags.replace(" ", "_")[:30]
+        save_dir = self.output_dir / f"pool_{pool_id}_{pool_name[:30]}_filter_{tag_slug}"
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        spider = YandeSpider(
+            output_dir=str(save_dir),
+            delay_range=self.delay_range,
+            mode=mode or self.mode,
+        )
+        spider.download_posts(
+            filtered,
+            description=f"Pool {pool_id}「{pool_name}」↳ '{filter_tags}' ({len(filtered)} 张)",
+        )
+
     def search_posts(self, tags, limit=50, page=1, mode=None):
         """
         按标签搜索帖子
@@ -396,6 +449,8 @@ def main():
             "  python yande_spider.py pool 99363 --mode jpeg\n"
             "  python yande_spider.py search \"lump_of_sugar\" -l 50\n"
             "  python yande_spider.py post 1260686\n"
+            "  python yande_spider.py pool-filter 99363 \"mito_mashiro\"\n"
+            "  python yande_spider.py pool-filter 99363 \"mito_mashiro kagamine_len\" -m jpeg\n"
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -441,6 +496,17 @@ def main():
     )
     p_retry.add_argument("--delay", type=float, nargs=2, default=[1.5, 3.0])
 
+    # pool-filter (混合搜索)
+    p_pf = sub.add_parser("pool-filter", help="画集中按标签过滤图片（混合搜索）")
+    p_pf.add_argument("pool_id", type=int, help="画集 ID")
+    p_pf.add_argument("tags", help="过滤标签（空格分隔，全部匹配才下载）")
+    p_pf.add_argument("-o", "--output", default=r"D:\储存\图片", help="输出目录")
+    p_pf.add_argument(
+        "-m", "--mode", choices=["file_url", "jpeg_url", "sample_url"],
+        default="file_url",
+    )
+    p_pf.add_argument("--delay", type=float, nargs=2, default=[1.5, 3.0])
+
     args = parser.parse_args()
 
     if args.command == "pool":
@@ -471,6 +537,13 @@ def main():
             mode=args.mode,
         )
         spider.retry_failed(args.dir)
+    elif args.command == "pool-filter":
+        spider = YandeSpider(
+            output_dir=args.output,
+            delay_range=tuple(args.delay),
+            mode=args.mode,
+        )
+        spider.scrape_pool_with_filter(args.pool_id, args.tags, mode=args.mode)
 
 
 if __name__ == "__main__":
