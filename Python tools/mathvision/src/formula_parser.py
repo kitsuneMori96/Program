@@ -137,27 +137,42 @@ class FormulaParser:
         return sp.sympify(text, locals=self._function_map)
 
     def _parse_explicit(self, latex: str) -> Dict[str, Any]:
-        """解析显函数: z = f(x, y)"""
-        # 去掉 "z = " 前缀
-        text = latex
-        text = re.sub(r'^z\s*=', '', text).strip()
+        """解析显函数: z = f(x, y) 或 y = f(x, z)"""
+        # 检测因变量
+        m = re.match(r'^\s*([yz])\s*=', latex)
+        if m:
+            dependent_var = m.group(1)
+            text = latex[m.end():].strip()
+        else:
+            dependent_var = 'z'
+            text = latex
+            text = re.sub(r'^z\s*=', '', text).strip()
         if not text:
-            text = latex  # 没有前缀则使用整个表达式
+            text = latex
 
         expr = self._latex_to_sympy(text)
-        # 验证变量合法性
-        valid, error = validate_expression(str(expr), ['x', 'y'])
+
+        if dependent_var == 'z':
+            variables = ['x', 'y']
+        else:
+            variables = ['x', 'z']
+
+        valid, error = validate_expression(str(expr), variables)
         if not valid:
             raise FormulaParseError(error)
 
         return {
             'type': 'explicit',
             'expr': expr,
-            'variables': ['x', 'y'],
+            'variables': variables,
+            'dependent_var': dependent_var,
         }
 
     def _parse_implicit(self, latex: str) -> Dict[str, Any]:
-        """解析隐函数: f(x, y, z) = 0"""
+        """解析隐函数: f(x, y, z) = 0
+
+        支持2变量方程 (如 x^2 + z^2 = 1)，缺失的变量在3D中自由变化。
+        """
         # 分割等号两边
         parts = latex.split('=')
         if len(parts) != 2:
@@ -176,14 +191,19 @@ class FormulaParser:
             expr_str = str(expr)
 
         expr = self._latex_to_sympy(expr_str)
-        valid, error = validate_expression(str(expr), ['x', 'y', 'z'])
-        if not valid:
-            raise FormulaParseError(error)
+        free_vars = {str(s) for s in expr.free_symbols}
+        allowed = {'x', 'y', 'z'}
+        undefined = free_vars - allowed
+        if undefined:
+            names = ', '.join(sorted(undefined))
+            raise FormulaParseError(f"表达式包含未定义的变量: {names}")
+
+        variables = sorted(free_vars & allowed)
 
         return {
             'type': 'implicit',
             'expr': expr,
-            'variables': ['x', 'y', 'z'],
+            'variables': variables,
         }
 
     def _parse_parametric(self, latex: str) -> Dict[str, Any]:
@@ -233,14 +253,32 @@ class FormulaParser:
         expr = parsed['expr']
 
         if ftype == 'explicit':
-            x, y = self._symbols['x'], self._symbols['y']
-            f = lambdify((x, y), expr, modules='numpy')
-            return lambda X, Y: f(X, Y)
+            dependent_var = parsed.get('dependent_var', 'z')
+            if dependent_var == 'z':
+                x, y = self._symbols['x'], self._symbols['y']
+                f = lambdify((x, y), expr, modules='numpy')
+                return lambda X, Y: f(X, Y)
+            else:  # dependent_var == 'y'
+                x, z = self._symbols['x'], self._symbols['z']
+                f = lambdify((x, z), expr, modules='numpy')
+                return lambda X, Z: f(X, Z)
 
         elif ftype == 'implicit':
-            x, y, z = self._symbols['x'], self._symbols['y'], self._symbols['z']
-            f = lambdify((x, y, z), expr, modules='numpy')
-            return lambda X, Y, Z: f(X, Y, Z)
+            variables = parsed.get('variables', ['x', 'y', 'z'])
+            syms = [self._symbols[v] for v in variables]
+            f = lambdify(tuple(syms), expr, modules='numpy')
+            if len(variables) == 3:
+                return lambda X, Y, Z: f(X, Y, Z)
+            elif len(variables) == 2:
+                if 'y' not in variables:
+                    # x, z only — y is free
+                    return lambda X, Y, Z: f(X, Z)
+                elif 'z' not in variables:
+                    return lambda X, Y, Z: f(X, Y)
+                else:
+                    return lambda X, Y, Z: f(Y, Z)
+            else:
+                return lambda X, Y, Z: f(X, Y, Z)
 
         elif ftype == 'parametric':
             u, v = self._symbols['u'], self._symbols['v']

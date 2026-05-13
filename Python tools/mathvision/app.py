@@ -114,6 +114,29 @@ def _generate_trace(item: FormulaItem) -> Optional[go.Trace]:
     func = item.numeric_func
 
     if ftype == 'explicit':
+        dependent_var = item.parsed.get('dependent_var', 'z')
+        if dependent_var == 'y':
+            # y = f(x, z): x, z 是输入，y 是输出
+            x_vals = np.linspace(-5, 5, 80)
+            z_vals = np.linspace(-5, 5, 80)
+            X, Zg = np.meshgrid(x_vals, z_vals)
+            with np.errstate(all='ignore'):
+                Y = func(X, Zg)
+            Y = np.nan_to_num(Y, nan=0.0)
+            return go.Surface(
+                x=X, y=Y, z=Zg,
+                name=item.label,
+                showscale=True,
+                colorscale=[[0, item.color], [1, item.color]],
+                opacity=item.opacity,
+                hovertemplate=(
+                    f'<b>{item.label}</b><br>'
+                    'x: %{x:.3f}<br>'
+                    'y: %{y:.3f}<br>'
+                    'z: %{z:.3f}<br>'
+                    '<extra></extra>'
+                ),
+            )
         from src.plot_generators.explicit_plot import generate_explicit_plot
         return generate_explicit_plot(
             func=func,
@@ -185,7 +208,7 @@ with st.sidebar:
         with col1:
             latex_input = st.text_input(
                 "LaTeX 公式",
-                placeholder="例如: z = sin(sqrt(x^2 + y^2))",
+                placeholder="例如: z = sin(sqrt(x^2 + y^2)) 或 y = -sqrt(1 - x^2 - z^2)",
                 label_visibility="collapsed",
             )
         with col2:
@@ -202,8 +225,10 @@ with st.sidebar:
             "显函数 - 双曲抛物面": "z = x^2 - y^2",
             "显函数 - 正弦波": "z = sin(sqrt(x^2 + y^2))",
             "显函数 - 高斯曲面": "z = exp(-(x^2 + y^2)/4)",
+            "显函数 - 下半球面": "y = -sqrt(1 - x^2 - z^2)",
             "隐函数 - 球体": "x^2 + y^2 + z^2 = 4",
             "隐函数 - 环面": "(sqrt(x^2 + y^2) - 2)^2 + z^2 = 1",
+            "隐函数 - 圆柱面": "x^2 + z^2 = 1",
             "参数方程 - 螺旋面": "x = u*cos(v), y = u*sin(v), z = v/2",
             "参数方程 - 球面": "x = sin(u)*cos(v), y = sin(u)*sin(v), z = cos(u)",
         }

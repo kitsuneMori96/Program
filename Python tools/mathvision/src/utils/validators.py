@@ -65,11 +65,10 @@ def detect_function_type(latex_str: str) -> str:
         if re.search(pat, text, re.IGNORECASE):
             return 'parametric'
 
-    # 隐函数检测：包含等号但没有 z = 形式
+    # 隐函数检测：包含等号但没有 z = / y = 形式
     if '=' in text:
-        # 检查是否为显函数 z = ...
-        explicit_pattern = r'^z\s*='  # 以 z = 开头
-        if re.match(explicit_pattern, text.strip(), re.IGNORECASE):
+        # 检查是否为显函数 z = f(x,y) 或 y = f(x,z)
+        if re.match(r'^[zy]\s*=', text.strip(), re.IGNORECASE):
             return 'explicit'
         return 'implicit'
 
