@@ -8,7 +8,7 @@ yande.re 通用爬虫
 
 使用方式：
     python yande_spider.py pool 99363
-    python yande_spider.py search "lump_of_sugar" --limit 20
+    python yande_spider.py search "favorite" --limit 1000
     python yande_spider.py post 1260686
     python yande_spider.py pool 99363 --mode jpeg  # 下载 JPEG 版（保留元数据/EXIF）
     #如果有些文件因网络问题失败，重试
@@ -54,13 +54,13 @@ class YandeSpider:
     def __init__(
         self,
         output_dir="downloads",
-        delay_range=(0.1, 0.9),
+        delay_range=(0.1, 0.2),
         resume_file=None,
         mode="file_url",
     ):
         """
         :param output_dir:         图片保存目录
-        :param delay_range:        请求间隔范围(秒)，默认 1~2s 防封
+        :param delay_range:        请求间隔范围(秒)，默认 0.1~0.2s 防封
         :param resume_file:        断点续传记录文件，默认存在 output_dir 下
         :param mode:               下载模式 file_url|jpeg_url|sample_url
         """
@@ -83,6 +83,43 @@ class YandeSpider:
     def _throttle(self):
         """随机延迟，降低被封概率"""
         time.sleep(random.uniform(*self.delay_range))
+
+    # ── 文件时间戳 ────────────────────────────────────
+
+    @staticmethod
+    def _parse_iso_timestamp(s):
+        """解析 ISO 8601 时间字符串 -> Unix 时间戳"""
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s)
+            return dt.timestamp()
+        except (ValueError, TypeError):
+            return None
+
+    def _apply_timestamp(self, filepath, response, created_at=None):
+        """为文件设置原始时间元数据
+
+        优先级: API created_at > HTTP Last-Modified
+        """
+        ts = None
+
+        # 1. API 上传时间（最准确）
+        if created_at:
+            ts = self._parse_iso_timestamp(created_at)
+
+        # 2. HTTP Last-Modified 头（fallback）
+        if ts is None:
+            last_modified = response.headers.get("Last-Modified")
+            if last_modified:
+                try:
+                    dt = datetime.strptime(last_modified, "%a, %d %b %Y %H:%M:%S %Z")
+                    ts = dt.timestamp()
+                except (ValueError, TypeError):
+                    pass
+
+        if ts is not None:
+            os.utime(filepath, (ts, ts))
 
     # ── 请求 ──────────────────────────────────────────
 
@@ -110,8 +147,11 @@ class YandeSpider:
                 self._throttle()
         return None
 
-    def _download_file(self, url, filepath, max_retries=5):
-        """下载单个文件，流式写入（带自动重试）"""
+    def _download_file(self, url, filepath, max_retries=5, created_at=None):
+        """下载单个文件，流式写入（带自动重试）
+
+        :param created_at: API 返回的 ISO 8601 时间字符串，用于保留原始时间元数据
+        """
         for attempt in range(1, max_retries + 1):
             self._throttle()
             try:
@@ -132,6 +172,9 @@ class YandeSpider:
                     for chunk in resp.iter_content(chunk_size=65536):
                         if chunk:
                             f.write(chunk)
+
+                # 保留原始时间元数据
+                self._apply_timestamp(filepath, resp, created_at)
                 return True, None
 
             except (requests.exceptions.Timeout,
@@ -214,12 +257,12 @@ class YandeSpider:
             filename = self._safe_filename(post)
             filepath = self.output_dir / filename
 
-            ok, err = self._download_file(url, filepath)
+            ok, err = self._download_file(url, filepath, created_at=post.get("created_at"))
             if ok:
                 self.state["success"] += 1
                 self.state["downloaded"].append(str(pid))
             else:
-                self.state["failed"].append({"id": pid, "url": url, "reason": err})
+                self.state["failed"].append({"id": pid, "url": url, "reason": err, "created_at": post.get("created_at")})
                 tqdm.write(f"  [失败] [{pid}] {err}")
 
             # 每张下载后保存一次续传状态
@@ -327,7 +370,7 @@ class YandeSpider:
             description=f"Pool {pool_id}「{pool_name}」↳ '{filter_tags}' ({len(filtered)} 张)",
         )
 
-    def search_posts(self, tags, limit=50, page=1, mode=None):
+    def search_posts(self, tags, limit=1000, page=1, mode=None):
         """
         按标签搜索帖子
         API: /post.json?tags=xxx&page=n&limit=n
@@ -426,7 +469,7 @@ class YandeSpider:
             filename = f"{pid}{ext}"
             filepath = fail_dir / filename
 
-            ok, err = self._download_file(url, filepath)
+            ok, err = self._download_file(url, filepath, created_at=item.get("created_at"))
             if ok:
                 success_count += 1
                 tqdm.write(f"  [成功] [{pid}] 下载完成")
