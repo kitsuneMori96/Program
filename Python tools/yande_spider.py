@@ -490,7 +490,7 @@ def main():
             "示例:\n"
             "  python yande_spider.py pool 99363\n"
             "  python yande_spider.py pool 99363 --mode jpeg\n"
-            "  python yande_spider.py search \"lump_of_sugar\" -l 50\n"
+            "  python yande_spider.py search \"lump_of_sugar\" -l 1000\n"
             "  python yande_spider.py post 1260686\n"
             "  python yande_spider.py pool-filter 99363 \"mito_mashiro\"\n"
             "  python yande_spider.py pool-filter 99363 \"mito_mashiro kagamine_len\" -m jpeg\n"
@@ -512,7 +512,7 @@ def main():
     # search
     p_search = sub.add_parser("search", help="按标签搜索帖子")
     p_search.add_argument("tags", help="搜索标签 (空格分隔用引号包裹)")
-    p_search.add_argument("-l", "--limit", type=int, default=50, help="下载数量")
+    p_search.add_argument("-l", "--limit", type=int, default=1000, help="下载数量")
     p_search.add_argument("-o", "--output", default=r"D:\储存\图片", help="输出目录")
     p_search.add_argument(
         "-m", "--mode", choices=["file_url", "jpeg_url", "sample_url"],

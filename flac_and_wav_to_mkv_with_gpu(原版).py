@@ -2,10 +2,8 @@
 """
 flac_and_wav_to_mkv_with_gpu.py
 
-GUI tool: single image + folder of audio files (.flac/.wav/.mp3/.m4a/.ogg/.wma/.opus/.aiff)
-  -> for each audio file:
-  0) non-FLAC/WAV formats are auto-converted to FLAC first
-  1) resample/re-encode -> FLAC @ 48kHz, 24-bit (or user-specified)
+GUI tool: single image + folder of .flac/.wav -> for each audio file:
+  1) resample/re-encode FLAC/WAV -> FLAC @ 48kHz, 24-bit
   2) generate a static H.264/H.265 video from image with duration == audio duration (GPU accelerated)
   3) mux video + FLAC into .mkv
   4) set audio track disposition default so players auto-play it
@@ -123,18 +121,6 @@ GPU_ENCODERS = {
     }
 }
 
-# 支持的音频格式扩展名映射
-AUDIO_EXTENSIONS = {
-    "flac": [".flac"],
-    "wav": [".wav", ".wave"],
-    "mp3": [".mp3"],
-    "m4a": [".m4a", ".aac"],
-    "ogg": [".ogg", ".oga"],
-    "wma": [".wma"],
-    "opus": [".opus"],
-    "aiff": [".aiff", ".aif"],
-}
-
 def detect_gpu_capabilities(ffmpeg_path=None):
     """检测系统可用的GPU编码器"""
     ffmpeg = ffmpeg_path or which_bin('ffmpeg') or 'ffmpeg'
@@ -200,41 +186,15 @@ class Worker(QThread):
     def _get_audio_files(self):
         """根据选择的文件类型获取音频文件列表"""
         files = []
-
+        
         for file_type in self.file_types:
-            exts = AUDIO_EXTENSIONS.get(file_type, [f".{file_type}"])
-            for ext in exts:
-                files.extend(self.folder_path.rglob(f"*{ext}"))
-
+            if file_type == "flac":
+                files.extend(self.folder_path.rglob("*.flac"))
+            elif file_type == "wav":
+                files.extend(self.folder_path.rglob("*.wav"))
+                
         return sorted(set(files))  # 去重并排序
         
-    def _convert_to_flac(self, audio_file, work_dir):
-        """将非FLAC/WAV音频文件转换为FLAC格式（参考 mp3_to_flac_subprocess.py）"""
-        output_path = work_dir / (audio_file.stem + "_converted.flac")
-
-        cmd = [
-            self.ffmpeg, '-y',
-            '-hide_banner', '-loglevel', 'error',
-            '-i', str(audio_file),
-            '-vn',              # 忽略视频流（如果有）
-            '-c:a', 'flac',
-            '-compression_level', '5',  # 默认压缩等级，平衡速度和大小
-            str(output_path)
-        ]
-
-        self._log(f"  正在转换 {audio_file.suffix} -> FLAC ...")
-        rc, _, _ = run_quiet(cmd, capture=False)
-        if rc != 0 or not output_path.exists():
-            # 捕获错误信息用于诊断
-            self._log("  转换为FLAC失败，尝试捕获错误信息...")
-            rc2, outb2, errb2 = run_quiet(cmd, capture=True)
-            err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
-            self._log(f"  转换失败 stderr 摘要:\n{err.strip()[:2000]}")
-            return None
-
-        self._log(f"  转换成功: {output_path.name}")
-        return output_path
-
     def _get_sample_format(self, bit_depth):
         """根据位深度返回对应的ffmpeg采样格式"""
         if bit_depth == 16:
@@ -304,7 +264,7 @@ class Worker(QThread):
         files = self._get_audio_files()
         
         if not files:
-            self._log("未找到支持的音频文件（请检查所选文件类型和文件夹路径）。")
+            self._log("未找到 .flac 或 .wav 文件。")
             self.finished.emit(0, 0)
             return
 
@@ -343,19 +303,6 @@ class Worker(QThread):
                 # 准备临时文件
                 with tempfile.TemporaryDirectory() as td:
                     td = Path(td)
-
-                    # 0) 格式检测：非 FLAC/WAV 先转换为 FLAC
-                    audio_suffix = audio_file.suffix.lower()
-                    needs_conversion = audio_suffix not in (".flac", ".wav", ".wave")
-                    if needs_conversion:
-                        converted = self._convert_to_flac(audio_file, td)
-                        if converted is None:
-                            continue
-                        audio_input = converted
-                        self._log(f"  转换后文件: {converted.name}")
-                    else:
-                        audio_input = audio_file
-
                     # 重采样后的FLAC路径
                     resampled = td / (audio_file.stem + f"_{self.sample_rate}k{self.bit_depth}bit.flac")
                     # 临时视频
@@ -364,12 +311,12 @@ class Worker(QThread):
 
                     # 1) 重采样音频 -> 指定采样率和位深的FLAC
                     self._log(f"  正在重采样音频 -> {self.sample_rate}kHz {self.bit_depth}-bit FLAC ...")
-
-                    # 构建ffmpeg命令（使用 audio_input：原始文件或转换后的FLAC）
+                    
+                    # 构建ffmpeg命令
                     cmd_resample = [
                         self.ffmpeg, '-y',
                         '-hide_banner', '-loglevel', 'error',
-                        '-i', str(audio_input),
+                        '-i', str(audio_file),
                     ]
                     
                     # 添加音频过滤器
@@ -492,7 +439,7 @@ class Worker(QThread):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("音频(FLAC/WAV/MP3/M4A等) -> MKV (GPU加速版)")
+        self.setWindowTitle("FLAC/WAV -> MKV (GPU加速版)")
         self.resize(900, 800)
 
         cfg = load_config()
@@ -603,41 +550,33 @@ class MainWindow(QMainWindow):
 
         # 音频设置
         gb_audio = QGroupBox("音频设置")
-        ga = QVBoxLayout()
-
-        # 第一行：采样率和位深度
-        h_audio_top = QHBoxLayout()
-        h_audio_top.addWidget(QLabel("采样率:"))
+        ga = QHBoxLayout()
+        ga.addWidget(QLabel("采样率:"))
         self.sample_rate_combo = QComboBox()
         self.sample_rate_combo.addItems(["44100", "48000", "96000", "192000"])
         self.sample_rate_combo.setCurrentText("48000")
-        h_audio_top.addWidget(self.sample_rate_combo)
-
-        h_audio_top.addSpacing(20)
-        h_audio_top.addWidget(QLabel("位深度:"))
+        ga.addWidget(self.sample_rate_combo)
+        
+        ga.addSpacing(20)
+        ga.addWidget(QLabel("位深度:"))
         self.bit_depth_combo = QComboBox()
         self.bit_depth_combo.addItems(["16", "24", "32"])
         self.bit_depth_combo.setCurrentText("24")
-        h_audio_top.addWidget(self.bit_depth_combo)
-        h_audio_top.addStretch()
-        ga.addLayout(h_audio_top)
-
-        # 第二行：文件类型选择
-        h_types = QHBoxLayout()
-        h_types.addWidget(QLabel("处理文件类型:"))
-
-        # 文件类型复选框（使用 AUDIO_EXTENSIONS 的 key 顺序）
-        audio_type_keys = ["flac", "wav", "mp3", "m4a", "ogg", "wma", "opus", "aiff"]
-        self.audio_type_checks = {}
-        for key in audio_type_keys:
-            cb = QCheckBox(key.upper())
-            cb.setChecked(key in self.file_types)
-            h_types.addWidget(cb)
-            self.audio_type_checks[key] = cb
-
-        h_types.addStretch()
-        ga.addLayout(h_types)
-
+        ga.addWidget(self.bit_depth_combo)
+        
+        ga.addSpacing(20)
+        ga.addWidget(QLabel("处理文件类型:"))
+        
+        # 文件类型复选框
+        self.flac_check = QCheckBox("FLAC")
+        self.flac_check.setChecked("flac" in self.file_types)
+        ga.addWidget(self.flac_check)
+        
+        self.wav_check = QCheckBox("WAV")
+        self.wav_check.setChecked("wav" in self.file_types)
+        ga.addWidget(self.wav_check)
+        
+        ga.addStretch()
         gb_audio.setLayout(ga)
         v.addWidget(gb_audio)
 
@@ -765,9 +704,10 @@ class MainWindow(QMainWindow):
     def get_selected_file_types(self):
         """获取选择的文件类型"""
         file_types = []
-        for key, cb in self.audio_type_checks.items():
-            if cb.isChecked():
-                file_types.append(key)
+        if self.flac_check.isChecked():
+            file_types.append("flac")
+        if self.wav_check.isChecked():
+            file_types.append("wav")
         return file_types
 
     def log(self, s: str):
@@ -829,7 +769,7 @@ class MainWindow(QMainWindow):
         # 检查是否选择了文件类型
         file_types = self.get_selected_file_types()
         if not file_types:
-            QMessageBox.warning(self, "提示", "请至少选择一种音频文件类型")
+            QMessageBox.warning(self, "提示", "请至少选择一种音频文件类型（FLAC 或 WAV）")
             return
             
         if not getattr(self, 'output_dir', ''):
