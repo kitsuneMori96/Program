@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
         cfg = load_config()
         self.user_ffmpeg = cfg.get('ffmpeg_path', '') or ''
         self.user_ffprobe = cfg.get('ffprobe_path', '') or ''
-        self.file_types = cfg.get('file_types', ['flac', 'wav'])
+        self.file_types = cfg.get('file_types', ['flac', 'wav', 'mp3', 'm4a', 'ogg', 'opus', 'wma', 'aiff'])
         self.gpu_type = cfg.get('gpu_type', 'cpu')
         self.video_codec = cfg.get('video_codec', 'h264')
         self.preset = cfg.get('preset', 'medium')
