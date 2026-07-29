@@ -80,155 +80,80 @@ class Config:
     display_tracklist: bool = True
     debug: bool = False
     show_progress: bool = True
+    skip_artworks: bool = False
+
+    _VALID_PARSERS = ("html.parser", "lxml", "html5lib")
 
     def __post_init__(self) -> None:
-        """Validate configuration values after initialization."""
         self._validate()
 
+    @staticmethod
+    def _check_type(value, expected_type, name):
+        if not isinstance(value, expected_type):
+            raise ValueError(f"{name} must be {expected_type.__name__}, got {type(value).__name__}")
+
+    @staticmethod
+    def _check_positive(value, name):
+        Config._check_type(value, (int, float), name)
+        if value <= 0:
+            raise ValueError(f"{name} must be positive, got {value}")
+
+    @staticmethod
+    def _check_min(value, minimum, name):
+        Config._check_type(value, int, name)
+        if value < minimum:
+            raise ValueError(f"{name} must be at least {minimum}, got {value}")
+
+    @staticmethod
+    def _check_range(value, lo, hi, name):
+        Config._check_type(value, (int, float), name)
+        if not (lo <= value <= hi):
+            raise ValueError(f"{name} must be between {lo} and {hi}, got {value}")
+
+    @staticmethod
+    def _check_nonempty_str(value, name):
+        Config._check_type(value, str, name)
+        if not value:
+            raise ValueError(f"{name} must be non-empty")
+
+    @staticmethod
+    def _check_in(value, choices, name):
+        if value not in choices:
+            raise ValueError(f"{name} must be one of {choices}, got {value!r}")
+
     def _validate(self) -> None:
-        """Validate all configuration parameters."""
-        if not isinstance(self.output_path, Path):
-            raise ValueError(
-                f"output_path must be a Path object, got {type(self.output_path)}"
-            )
-
-        if not isinstance(self.artworks_directory, str):
-            raise ValueError(
-                f"artworks_directory must be a string, got {type(self.artworks_directory)}"
-            )
-
-        if not isinstance(self.max_name_bytes, int) or self.max_name_bytes < 32:
-            raise ValueError(
-                f"max_name_bytes must be at least 32, got {self.max_name_bytes}"
-            )
-
-        if (
-            not isinstance(self.invalid_chars_pattern, str)
-            or not self.invalid_chars_pattern
-        ):
-            raise ValueError(
-                f"invalid_chars_pattern must be non-empty string, got {self.invalid_chars_pattern}"
-            )
-
-        if not isinstance(self.invalid_chars_replacement, str):
-            raise ValueError(
-                f"invalid_chars_replacement must be string, got {type(self.invalid_chars_replacement)}"
-            )
-
-        if not isinstance(self.max_concurrency, int) or self.max_concurrency < 1:
-            raise ValueError(
-                f"max_concurrency must be at least 1, got {self.max_concurrency}"
-            )
-
-        if not isinstance(self.rate_limit, (int, float)) or self.rate_limit <= 0:
-            raise ValueError(
-                f"rate_limit must be positive number, got {self.rate_limit}"
-            )
-
-        if not isinstance(self.jitter_percent, (int, float)) or not (
-            0 <= self.jitter_percent <= 100
-        ):
-            raise ValueError(
-                f"jitter_percent must be between 0 and 100, got {self.jitter_percent}"
-            )
-
+        self._check_type(self.output_path, Path, "output_path")
+        self._check_type(self.artworks_directory, str, "artworks_directory")
+        self._check_min(self.max_name_bytes, 32, "max_name_bytes")
+        self._check_nonempty_str(self.invalid_chars_pattern, "invalid_chars_pattern")
+        self._check_type(self.invalid_chars_replacement, str, "invalid_chars_replacement")
+        self._check_min(self.max_concurrency, 1, "max_concurrency")
+        self._check_positive(self.rate_limit, "rate_limit")
+        self._check_range(self.jitter_percent, 0, 100, "jitter_percent")
         if self.chunk_size is not None:
-            if not isinstance(self.chunk_size, int) or self.chunk_size <= 0:
-                raise ValueError(
-                    f"chunk_size must be positive integer or None, got {self.chunk_size}"
-                )  # 0 → None in main()
-
-        if not isinstance(self.max_retries, int) or self.max_retries < 0:
-            raise ValueError(
-                f"max_retries must be non-negative integer, got {self.max_retries}"
-            )
-
-        for timeout_name, timeout_value in [
-            ("connection_timeout", self.connection_timeout),
-            ("read_timeout", self.read_timeout),
-            ("total_timeout", self.total_timeout),
-        ]:
-            if not isinstance(timeout_value, (int, float)) or timeout_value <= 0:
-                raise ValueError(
-                    f"{timeout_name} must be positive number, got {timeout_value}"
-                )
-
-        if not isinstance(self.html_parser, str):
-            raise ValueError(
-                f"html_parser must be string, got {type(self.html_parser)}"
-            )
-
-        valid_parsers = ["html.parser", "lxml", "html5lib"]
-        if self.html_parser not in valid_parsers:
-            raise ValueError(
-                f"html_parser must be one of {valid_parsers}, got {self.html_parser}"
-            )
-
+            self._check_positive(self.chunk_size, "chunk_size")
+        self._check_min(self.max_retries, 0, "max_retries")
+        for n in ("connection_timeout", "read_timeout", "total_timeout"):
+            self._check_positive(getattr(self, n), n)
+        self._check_nonempty_str(self.html_parser, "html_parser")
+        self._check_in(self.html_parser, self._VALID_PARSERS, "html_parser")
         if self.html_parser == "lxml" and not LXML_AVAILABLE:
-            raise ValueError(
-                "lxml parser requested but lxml is not installed. Falling back to html.parser."
-            )
-
-        if not isinstance(self.preferred_formats, tuple):
-            raise ValueError(
-                f"preferred_formats must be a tuple, got {type(self.preferred_formats)}"
-            )
+            raise ValueError("lxml parser requested but lxml is not installed")
+        self._check_type(self.preferred_formats, tuple, "preferred_formats")
         if not self.preferred_formats:
             raise ValueError("preferred_formats must not be empty")
         for fmt in self.preferred_formats:
             if not isinstance(fmt, str) or not fmt:
-                raise ValueError(
-                    f"All preferred_formats must be non-empty strings, got {self.preferred_formats}"
-                )
-
+                raise ValueError(f"All preferred_formats must be non-empty strings, got {self.preferred_formats}")
         if self.track_padding is not None:
-            if not isinstance(self.track_padding, int) or not (
-                1 <= self.track_padding <= 4
-            ):
-                raise ValueError(
-                    f"track_padding must be between 1 and 4 or None, got {self.track_padding}"
-                )
-
-        if not isinstance(self.padding_mode, str) or self.padding_mode not in (
-            "disc",
-            "total",
-        ):
-            raise ValueError(
-                f"padding_mode must be 'disc' or 'total', got {self.padding_mode}"
-            )
-
-        if not isinstance(self.user_agent, str) or not self.user_agent:
-            raise ValueError(
-                f"user_agent must be non-empty string, got {self.user_agent}"
-            )
-
-        if not isinstance(self.base_album_url, str) or not self.base_album_url:
-            raise ValueError(
-                f"base_album_url must be non-empty string, got {self.base_album_url}"
-            )
-
-        if not isinstance(self.base_referer, str) or not self.base_referer:
-            raise ValueError(
-                f"base_referer must be non-empty string, got {self.base_referer}"
-            )
-
-        if not isinstance(self.display_album_info, bool):
-            raise ValueError(
-                f"display_album_info must be boolean, got {type(self.display_album_info)}"
-            )
-
-        if not isinstance(self.display_tracklist, bool):
-            raise ValueError(
-                f"display_tracklist must be boolean, got {type(self.display_tracklist)}"
-            )
-
-        if not isinstance(self.debug, bool):
-            raise ValueError(f"debug must be boolean, got {type(self.debug)}")
-
-        if not isinstance(self.show_progress, bool):
-            raise ValueError(
-                f"show_progress must be boolean, got {type(self.show_progress)}"
-            )
+            self._check_range(self.track_padding, 1, 4, "track_padding")
+        self._check_nonempty_str(self.padding_mode, "padding_mode")
+        self._check_in(self.padding_mode, ("disc", "total"), "padding_mode")
+        self._check_nonempty_str(self.user_agent, "user_agent")
+        self._check_nonempty_str(self.base_album_url, "base_album_url")
+        self._check_nonempty_str(self.base_referer, "base_referer")
+        for n in ("display_album_info", "display_tracklist", "debug", "show_progress", "skip_artworks"):
+            self._check_type(getattr(self, n), bool, n)
 
 
 class PathSanitizer:
@@ -530,6 +455,25 @@ def setup_logging(
     return logger
 
 
+def emit_log_lines(
+    lines: list[tuple[str, ...]],
+    logger: logging.Logger,
+) -> None:
+    """Emit structured log lines (("text", "type") or ("key", "value", "key_value"))."""
+    for line in lines:
+        if len(line) == 2:
+            text, line_type = line
+            if line_type == "separator":
+                logger.info(text, extra={"separator": True})
+            elif line_type == "header":
+                logger.info(text, extra={"header": True})
+            else:
+                logger.info(text)
+        else:
+            key, value, _ = line
+            logger.info("", extra={"key_value": True, "key": key, "value": value})
+
+
 # -----------------------------------------------------------------------------
 # Core Components
 # -----------------------------------------------------------------------------
@@ -699,7 +643,7 @@ class BaseDownloader:
         referer: str,
         item: TrackInfo | ArtworkInfo,
     ) -> bool:
-        """Download a file with progress tracking and verification."""
+        """Download a file with progress tracking, Range resume, and verification."""
         generic_context = DownloadContext.get_generic_context(item)
         specific_context = self._get_specific_context(item)
 
@@ -711,7 +655,7 @@ class BaseDownloader:
                 f"{specific_context}: Local file exists with size: {local_size} bytes"
             )
 
-        # For existing files, we need to check remote size first using HEAD
+        # Check remote size with HEAD to decide skip / resume / re-download
         remote_size = None
         if file_exists:
             remote_size = await self._get_remote_file_size(
@@ -725,7 +669,7 @@ class BaseDownloader:
                     return True
                 else:
                     self.logger.warning(
-                        f"{specific_context}: exists but size mismatch: local {local_size} vs remote {remote_size}. Redownloading."
+                        f"{specific_context}: exists but size mismatch: local {local_size} vs remote {remote_size}. Re-downloading."
                     )
             else:
                 self.logger.warning(
@@ -734,21 +678,42 @@ class BaseDownloader:
 
         temp_path = file_path.parent / f".{file_path.name}"
 
+        # Check for partially-downloaded temp file (for Range resume)
+        start_byte = 0
+        if not file_exists and temp_path.exists():
+            start_byte = temp_path.stat().st_size
+            if start_byte > 0:
+                self.logger.info(
+                    f"{specific_context}: Found partial download ({start_byte} bytes), will attempt resume"
+                )
+
         for attempt in range(self.config.max_retries + 1):
             try:
                 await self.rate_limiter.acquire()
 
+                req_headers = {"Referer": referer}
+                if start_byte > 0:
+                    req_headers["Range"] = f"bytes={start_byte}-"
+
                 async with session.get(
                     download_url,
-                    headers={"Referer": referer},
+                    headers=req_headers,
                     timeout=self.timeout,
                 ) as response:
+                    # If Range was requested but server returned 200 (not 206), fall back to full download
+                    if start_byte > 0 and response.status == 200:
+                        self.logger.debug(
+                            f"{specific_context}: Server does not support Range; re-downloading from start"
+                        )
+                        start_byte = 0
+
                     response.raise_for_status()
 
-                    # Get content length from GET response
-                    content_length = int(response.headers.get("Content-Length", 0))
+                    content_length_str = response.headers.get("Content-Length", "0")
+                    # For 206 Partial Content, Content-Length is the remaining bytes
+                    content_length = int(content_length_str) if content_length_str.isdigit() else 0
 
-                    if not file_exists and content_length > 0:
+                    if not file_exists and start_byte == 0 and content_length > 0:
                         self.logger.debug(
                             f"{specific_context}: Set file size from GET response: {content_length} bytes"
                         )
@@ -759,13 +724,15 @@ class BaseDownloader:
                                 f"{specific_context}: Content-Length mismatch: HEAD {remote_size} vs GET {content_length}"
                             )
 
+                    expected_total = content_length + start_byte
                     file_size_info = (
-                        f" ({content_length / 1024 / 1024:.1f} MiB)"
-                        if content_length > 0
+                        f" ({expected_total / 1024 / 1024:.1f} MiB)"
+                        if expected_total > 0
                         else ""
                     )
+                    label = "Resuming" if start_byte > 0 else "Downloading"
                     self.logger.info(
-                        f"Downloading {generic_context.lower()}: {file_path.name}{file_size_info}"
+                        f"{label} {generic_context.lower()}: {file_path.name}{file_size_info}"
                     )
 
                     # Acquire a terminal row for this download's progress bar
@@ -774,17 +741,20 @@ class BaseDownloader:
                         position = await self._pool.acquire()
 
                     try:
-                        async with aiofiles.open(temp_path, "wb") as f:
+                        open_mode = "ab" if start_byte > 0 else "wb"
+                        async with aiofiles.open(temp_path, open_mode) as f:
                             if self.config.chunk_size is None:
-                                # Single write — no progress granularity
                                 content = await response.read()
                                 await f.write(content)
                             else:
+                                bar_total = expected_total if expected_total > 0 else 0
                                 with ProgressBar(
-                                    content_length if content_length > 0 else 0,
+                                    bar_total,
                                     desc=file_path.name,
                                     position=position,
                                 ) as bar:
+                                    if start_byte > 0:
+                                        bar.update(start_byte)
                                     async for chunk in response.content.iter_chunked(
                                         self.config.chunk_size
                                     ):
@@ -796,29 +766,24 @@ class BaseDownloader:
 
                     actual_size = temp_path.stat().st_size
                     if (
-                        content_length
-                        and content_length > 0
-                        and actual_size != content_length
+                        expected_total
+                        and expected_total > 0
+                        and actual_size != expected_total
                     ):
                         raise ValueError(
-                            f"Size mismatch: expected {content_length}, got {actual_size}"
+                            f"Size mismatch: expected {expected_total}, got {actual_size}"
                         )
 
                     temp_path.rename(file_path)
 
-                    if file_exists:
-                        self.logger.info(
-                            f"Successfully re-downloaded {generic_context.lower()}: {file_path.name}"
-                        )
-                    else:
-                        self.logger.info(
-                            f"Successfully downloaded {generic_context.lower()}: {file_path.name}"
-                        )
+                    self.logger.info(
+                        f"Successfully {'re-' if file_exists else ''}downloaded {generic_context.lower()}: {file_path.name}"
+                    )
                     return True
 
             except Exception as e:
-                # Clean up temp file on error
-                if temp_path.exists():
+                # Keep partial temp file for potential resume on next run
+                if temp_path.exists() and temp_path.stat().st_size == 0:
                     temp_path.unlink()
 
                 if attempt < self.config.max_retries:
@@ -861,7 +826,8 @@ class ArtworkDownloader(BaseDownloader):
                     img_url = str(base_url.join(yarl.URL(img_link["href"])))
 
                     # Skip thumbnail URLs
-                    if "/thumbs/" in img_url:
+                    img_url_path = yarl.URL(img_url).path.lower()
+                    if any(t in img_url_path for t in ("/thumbs/", "/thumb/", "/thumbnail/")):
                         self.logger.debug(f"Skipping thumbnail: {img_url}")
                         continue
 
@@ -1201,6 +1167,8 @@ class TrackDownloader(BaseDownloader):
                         track_url = str(base_url.join(yarl.URL(track_link["href"])))
 
                 if track_name and track_url:
+                    if not track_name.strip():
+                        track_name = f"Track {track_number}"
                     track = TrackInfo(
                         number=track_number,
                         name=track_name,
@@ -1270,6 +1238,31 @@ class TrackDownloader(BaseDownloader):
         )
         return False
 
+    async def _fetch_all_track_infos(
+        self,
+        session: aiohttp.ClientSession,
+        tracks: list[TrackInfo],
+        album_url: str,
+    ) -> list[TrackInfo]:
+        """Fetch download URLs for all tracks in parallel (no semaphore)."""
+        async def _fetch_one(track: TrackInfo) -> bool:
+            try:
+                return await self._get_download_info(session, track, album_url)
+            except Exception as e:
+                self.logger.error(f"Error fetching info for {track.name}: {e}")
+                return False
+
+        tasks = [_fetch_one(t) for t in tracks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        valid = []
+        for track, ok in zip(tracks, results):
+            if ok is True:
+                valid.append(track)
+            else:
+                self.logger.error(f"Could not find download URL for {track.name}")
+        return valid
+
     async def _download_track(
         self,
         session: aiohttp.ClientSession,
@@ -1278,17 +1271,17 @@ class TrackDownloader(BaseDownloader):
         album_dir: Path,
         padding_dict: dict[int | None, int],
     ) -> bool:
-        """Download a single track."""
+        """Download a single track (download_url must already be set)."""
         async with self.semaphore:
             specific_context = self._get_specific_context(track)
 
-            if not await self._get_download_info(session, track, album_url):
-                self.logger.error(f"{specific_context}: Could not find download URL")
+            if not track.download_url:
+                self.logger.error(f"{specific_context}: No download URL available")
                 return False
 
             track_padding = padding_dict.get(
                 track.disc_number, 3
-            )  # Default to 3 if not found
+            )
             sanitized_name = self._sanitize_track_filename(
                 track.name,
                 track_number=track.number,
@@ -1314,10 +1307,19 @@ class TrackDownloader(BaseDownloader):
         if not tracks:
             return 0, 0
 
-        self.logger.info(f"Downloading {len(tracks)} track(s)...")
+        # Phase 1: fetch download URLs for all tracks concurrently
+        self.logger.info(f"Fetching download info for {len(tracks)} track(s)...")
+        tracks_with_info = await self._fetch_all_track_infos(session, tracks, album_url)
+
+        if not tracks_with_info:
+            self.logger.error("No tracks with valid download URLs found")
+            return 0, 0
+
+        # Phase 2: download all tracks
+        self.logger.info(f"Downloading {len(tracks_with_info)} track(s)...")
 
         download_tasks = []
-        for track in tracks:
+        for track in tracks_with_info:
             task = self._download_track(
                 session, track, album_url, album_dir, padding_dict
             )
@@ -1325,12 +1327,11 @@ class TrackDownloader(BaseDownloader):
 
         results = await asyncio.gather(*download_tasks, return_exceptions=True)
 
-        # Count successes
         successful = sum(1 for r in results if r is True)
-        failed = len(tracks) - successful
+        failed = len(tracks_with_info) - successful
 
         self.logger.info(
-            f"Tracks completed: {successful}/{len(tracks)} downloaded successfully"
+            f"Tracks completed: {successful}/{len(tracks_with_info)} downloaded successfully"
         )
         if failed > 0:
             self.logger.warning(f"{failed} tracks failed to download")
@@ -1432,99 +1433,48 @@ class KhinsiderDownloader:
         base_delay_ms = (1.0 / self.config.rate_limit) * 1000
         max_delay_ms = base_delay_ms * (1 + self.config.jitter_percent / 100.0)
 
-        lines = []
+        lines: list[tuple[str, ...]] = []
         lines.append(("=" * 60, "separator"))
         lines.append(("ALBUM INFORMATION", "header"))
         lines.append(("=" * 60, "separator"))
         lines.append(("Album", album_name, "key_value"))
         lines.append(("Output", str(album_dir), "key_value"))
-        lines.append(
-            (
-                "Artworks Directory",
-                (
-                    self.config.artworks_directory
-                    if self.config.artworks_directory
-                    else "None (directly in album)"
-                ),
-                "key_value",
-            )
-        )
+        aw_label = self.config.artworks_directory or "None (directly in album)"
+        lines.append(("Artworks Directory", aw_label, "key_value"))
         lines.append(("Artworks", str(artwork_count), "key_value"))
         lines.append(("Tracks", str(len(tracks)), "key_value"))
-        lines.append(
-            (
-                "Discs",
-                f"{disc_count} {'(Multi-Disc)' if is_multi_disc else '(Single Disc)'}",
-                "key_value",
-            )
-        )
+        disc_label = f"{disc_count} {'(Multi-Disc)' if is_multi_disc else '(Single Disc)'}"
+        lines.append(("Discs", disc_label, "key_value"))
         lines.append(("-" * 60, "separator"))
         lines.append(("CONFIGURATION", "header"))
         lines.append(("-" * 60, "separator"))
-        lines.append(
-            ("Concurrent Downloads", str(self.config.max_concurrency), "key_value")
-        )
+        lines.append(("Concurrent Downloads", str(self.config.max_concurrency), "key_value"))
         lines.append(("Rate Limit", f"{self.config.rate_limit} RPS", "key_value"))
         lines.append(("Jitter", f"{self.config.jitter_percent}%", "key_value"))
-        lines.append(
-            ("Request Delay", f"{base_delay_ms:.0f}-{max_delay_ms:.0f} ms", "key_value")
-        )
-        lines.append(
-            ("Chunk Size", str(self.config.chunk_size or "Single write"), "key_value")
-        )
+        lines.append(("Request Delay", f"{base_delay_ms:.0f}-{max_delay_ms:.0f} ms", "key_value"))
+        lines.append(("Chunk Size", str(self.config.chunk_size or "Single write"), "key_value"))
         lines.append(("Max Retries", str(self.config.max_retries), "key_value"))
         lines.append(("HTML Parser", self.config.html_parser, "key_value"))
-        lines.append(
-            ("Preferred Formats", ", ".join(self.config.preferred_formats), "key_value")
-        )
+        lines.append(("Preferred Formats", ", ".join(self.config.preferred_formats), "key_value"))
 
         if self.config.track_padding is not None:
-            lines.append(
-                (
-                    "Track Padding",
-                    f"{self.config.track_padding} digit(s) (manual override)",
-                    "key_value",
-                )
-            )
+            lines.append(("Track Padding", f"{self.config.track_padding} digit(s) (manual override)", "key_value"))
         elif is_multi_disc:
             if self.config.padding_mode == "total":
                 first_padding = next(iter(padding_dict.values()))
-                lines.append(
-                    (
-                        "Track Padding",
-                        f"{first_padding} digit(s) (consistent across all discs)",
-                        "key_value",
-                    )
-                )
-            else:  # disc mode
-                padding_info = []
+                lines.append(("Track Padding", f"{first_padding} digit(s) (consistent across all discs)", "key_value"))
+            else:
                 for disc_num in disc_numbers:
                     padding = padding_dict.get(disc_num, 2)
-                    padding_info.append(f"Disc {disc_num}: {padding} digit(s)")
-                lines.append(("Track Padding", ", ".join(padding_info), "key_value"))
+                    lines.append(("Track Padding (Disc)", f"Disc {disc_num}: {padding} digit(s)", "key_value"))
         else:
-            # Single disc
-            padding = padding_dict.get(None, 2)
-            lines.append(("Track Padding", f"{padding} digit(s)", "key_value"))
+            lines.append(("Track Padding", f"{padding_dict.get(None, 2)} digit(s)", "key_value"))
 
         if self.config.track_padding is None:
             lines.append(("Padding Mode", self.config.padding_mode, "key_value"))
         lines.append(("=" * 60, "separator"))
 
-        for line in lines:
-            if len(line) == 2:
-                text, line_type = line
-                if line_type == "separator":
-                    self.logger.info(text, extra={"separator": True})
-                elif line_type == "header":
-                    self.logger.info(text, extra={"header": True})
-                else:
-                    self.logger.info(text)
-            else:  # key_value
-                key, value, line_type = line
-                self.logger.info(
-                    "", extra={"key_value": True, "key": key, "value": value}
-                )
+        emit_log_lines(lines, self.logger)
 
     async def download_album(self, album_input: str) -> bool:
         """Download all artworks and tracks from an album."""
@@ -1591,16 +1541,23 @@ class KhinsiderDownloader:
                 self.track_downloader._display_tracklist(tracks, padding_dict)
 
             # Download artworks
-            artwork_success, artwork_failed = (
-                await self.artwork_downloader.download_artworks(
-                    session, artworks, album_url, album_dir
+            artwork_success = artwork_failed = 0
+            if not self.config.skip_artworks and artworks:
+                artwork_success, artwork_failed = (
+                    await self.artwork_downloader.download_artworks(
+                        session, artworks, album_url, album_dir
+                    )
                 )
-            )
+            elif not artworks:
+                self.logger.info("No artworks found")
 
             # Download tracks
             track_success, track_failed = await self.track_downloader.download_tracks(
                 session, tracks, album_url, album_dir, padding_dict
             )
+
+            # Generate M3U playlist
+            await self._generate_m3u_playlist(album_dir)
 
             total_success = artwork_success + track_success
             total_failed = artwork_failed + track_failed
@@ -1611,7 +1568,29 @@ class KhinsiderDownloader:
             if total_failed > 0:
                 self.logger.warning(f"{total_failed} items failed to download")
 
-            return track_failed == 0  # Consider album success if all tracks downloaded
+            return track_failed == 0
+
+    async def _generate_m3u_playlist(self, album_dir: Path) -> None:
+        """Generate an M3U playlist from downloaded audio files in album_dir."""
+        audio_exts = {".flac", ".wav", ".mp3", ".m4a", ".opus", ".ogg", ".aac", ".wma", ".aiff"}
+        try:
+            files = sorted(
+                [f for f in album_dir.iterdir() if f.suffix.lower() in audio_exts],
+                key=lambda f: f.name.lower(),
+            )
+        except OSError:
+            return
+        if not files:
+            return
+        m3u_path = album_dir / f"{album_dir.name}.m3u"
+        try:
+            async with aiofiles.open(m3u_path, "w", encoding="utf-8") as f:
+                await f.write("#EXTM3U\n")
+                for file in files:
+                    await f.write(f"{file.name}\n")
+            self.logger.info(f"Generated M3U playlist: {m3u_path.name} ({len(files)} tracks)")
+        except OSError as e:
+            self.logger.warning(f"Failed to generate M3U playlist: {e}")  # Consider album success if all tracks downloaded
 
 
 # -----------------------------------------------------------------------------
@@ -1736,6 +1715,12 @@ Examples:
         help="Disable progress bars (use for scripting or non-TTY output)",
     )
 
+    parser.add_argument(
+        "--skip-artworks",
+        action="store_true",
+        help="Skip downloading artwork images",
+    )
+
     args = parser.parse_args()
 
     # Set up logging for CLI usage
@@ -1756,6 +1741,7 @@ Examples:
             padding_mode=args.padding_mode,
             debug=args.debug,
             show_progress=not args.no_progress,
+            skip_artworks=args.skip_artworks,
         )
     except ValueError as e:
         print(f"{Fore.RED}Configuration error: {e}", file=sys.stderr)
@@ -1781,19 +1767,7 @@ Examples:
         ("Albums processed", f"{successful_albums}/{len(args.urls)}", "key_value")
     )
     summary_lines.append(("=" * 60, "separator"))
-
-    for line in summary_lines:
-        if len(line) == 2:
-            text, line_type = line
-            if line_type == "separator":
-                logger.info(text, extra={"separator": True})
-            elif line_type == "header":
-                logger.info(text, extra={"header": True})
-            else:
-                logger.info(text)
-        else:  # key_value
-            key, value, line_type = line
-            logger.info("", extra={"key_value": True, "key": key, "value": value})
+    emit_log_lines(summary_lines, logger)
 
 
 if __name__ == "__main__":
