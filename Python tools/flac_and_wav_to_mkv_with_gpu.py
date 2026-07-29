@@ -24,6 +24,8 @@ import json
 import shutil
 import tempfile
 import subprocess
+import concurrent.futures
+import traceback
 from pathlib import Path
 
 from PyQt5.QtWidgets import (
@@ -71,27 +73,36 @@ def run_quiet(cmd, capture=False, timeout=None, ffmpeg_safe=True):
         p = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=timeout)
         return p.returncode, None, None
 
-def ffprobe_duration_seconds(path: Path, ffprobe_bin=None):
+def ffprobe_audio_info(path: Path, ffprobe_bin=None):
+    """一次 ffprobe 调用获取时长、是否有音频流、采样率、位深、编码器名称"""
     ffprobe = ffprobe_bin or which_bin('ffprobe') or 'ffprobe'
-    cmd = [ffprobe, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', str(path)]
+    cmd = [
+        ffprobe, '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-show_streams',
+        '-of', 'json',
+        str(path)
+    ]
     rc, outb, errb = run_quiet(cmd, capture=True)
-    if rc != 0:
+    if rc != 0 or not outb:
         stderr = errb.decode('utf-8', errors='ignore') if errb else ''
-        raise RuntimeError(f"ffprobe failed: {stderr.strip()}")
-    out = outb.decode('utf-8', errors='ignore') if outb else ''
-    try:
-        return float(out.strip())
-    except Exception:
-        raise RuntimeError(f"ffprobe returned unparsable duration: {out!r}")
-
-def ffprobe_has_audio(path: Path, ffprobe_bin=None):
-    ffprobe = ffprobe_bin or which_bin('ffprobe') or 'ffprobe'
-    cmd = [ffprobe, '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'default=noprint_wrappers=1:nokey=1', str(path)]
-    rc, outb, errb = run_quiet(cmd, capture=True)
-    if rc != 0:
-        return False
-    out = outb.decode('utf-8', errors='ignore') if outb else ''
-    return bool(out.strip())
+        raise RuntimeError(f"ffprobe failed: {stderr.strip()[:200]}")
+    data = json.loads(outb.decode('utf-8', errors='ignore'))
+    duration = float(data.get('format', {}).get('duration', 0))
+    audio_stream = None
+    for st in data.get('streams', []):
+        if st.get('codec_type') == 'audio':
+            audio_stream = st
+            break
+    if audio_stream is None:
+        return {'duration': duration, 'has_audio': False}
+    return {
+        'duration': duration,
+        'has_audio': True,
+        'sample_rate': int(audio_stream.get('sample_rate', 0)),
+        'bits_per_sample': int(audio_stream.get('bits_per_raw_sample', 0) or audio_stream.get('bits_per_sample', 0) or 0),
+        'codec_name': audio_stream.get('codec_name', ''),
+    }
 
 # -------------------------
 # GPU Encoder Settings
@@ -178,7 +189,7 @@ class Worker(QThread):
                  ffmpeg_path=None, ffprobe_path=None, fps=24, 
                  sample_rate=48000, bit_depth=24,
                  gpu_type="cpu", video_codec="h264", preset="medium",
-                 auto_jpg_to_png_fallback=True):
+                 auto_jpg_to_png_fallback=True, max_workers=2):
         super().__init__()
         self.image_path = Path(image_path).resolve()
         self.folder_path = Path(folder_path).resolve()
@@ -193,116 +204,215 @@ class Worker(QThread):
         self.video_codec = video_codec
         self.preset = preset
         self.auto_jpg_to_png_fallback = auto_jpg_to_png_fallback
-        
+        self.max_workers = max_workers
+        self._temp_dir = None
+
     def _log(self, s):
         self.log.emit(s)
-        
-    def _get_audio_files(self):
-        """根据选择的文件类型获取音频文件列表"""
-        files = []
 
+    def _get_audio_files(self):
+        files = []
         for file_type in self.file_types:
             exts = AUDIO_EXTENSIONS.get(file_type, [f".{file_type}"])
             for ext in exts:
                 files.extend(self.folder_path.rglob(f"*{ext}"))
+        return sorted(set(files))
 
-        return sorted(set(files))  # 去重并排序
-        
+    def _get_audio_info(self, path):
+        return ffprobe_audio_info(path, ffprobe_bin=self.ffprobe)
+
     def _convert_to_flac(self, audio_file, work_dir):
-        """将非FLAC/WAV音频文件转换为FLAC格式（参考 mp3_to_flac_subprocess.py）"""
         output_path = work_dir / (audio_file.stem + "_converted.flac")
-
         cmd = [
             self.ffmpeg, '-y',
             '-hide_banner', '-loglevel', 'error',
             '-i', str(audio_file),
-            '-vn',              # 忽略视频流（如果有）
+            '-vn',
             '-c:a', 'flac',
-            '-compression_level', '5',  # 默认压缩等级，平衡速度和大小
+            '-compression_level', '5',
             str(output_path)
         ]
-
         self._log(f"  正在转换 {audio_file.suffix} -> FLAC ...")
         rc, _, _ = run_quiet(cmd, capture=False)
         if rc != 0 or not output_path.exists():
-            # 捕获错误信息用于诊断
-            self._log("  转换为FLAC失败，尝试捕获错误信息...")
             rc2, outb2, errb2 = run_quiet(cmd, capture=True)
             err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
-            self._log(f"  转换失败 stderr 摘要:\n{err.strip()[:2000]}")
+            self._log(f"  转换失败: {err.strip()[:500]}")
             return None
-
         self._log(f"  转换成功: {output_path.name}")
         return output_path
 
+    def _resample_audio(self, audio_input, output_path):
+        cmd = [
+            self.ffmpeg, '-y',
+            '-hide_banner', '-loglevel', 'error',
+            '-i', str(audio_input),
+            '-af', f'aresample={self.sample_rate}',
+            '-sample_fmt', 's32' if self.bit_depth >= 24 else 's16',
+            '-bits_per_raw_sample', str(self.bit_depth),
+            str(output_path)
+        ]
+        rc, _, _ = run_quiet(cmd, capture=False)
+        if rc != 0 or not output_path.exists():
+            rc2, outb2, errb2 = run_quiet(cmd, capture=True)
+            err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
+            self._log(f"  重采样失败: {err.strip()[:500]}")
+            return False
+        self._log("  重采样成功")
+        return True
+
     def _get_sample_format(self, bit_depth):
-        """根据位深度返回对应的ffmpeg采样格式"""
-        if bit_depth == 16:
-            return "s16"
-        elif bit_depth == 24:
-            return "s32"  # ffmpeg使用s32表示24-bit
-        elif bit_depth == 32:
-            return "s32"
-        else:
-            return "s32"  # 默认
-    
+        return "s32" if bit_depth >= 24 else "s16"
+
     def _get_gpu_encoder_settings(self):
-        """获取GPU编码器设置"""
         gpu_info = GPU_ENCODERS.get(self.gpu_type, GPU_ENCODERS["cpu"])
         encoder = gpu_info.get(self.video_codec, gpu_info.get("h264"))
         extra_params = gpu_info.get("requires", [])
         return encoder, extra_params
-    
-    def _build_video_command(self, image_path, temp_video, duration, encoder, extra_params):
-        """构建视频生成命令"""
+
+    def _build_reference_video_command(self, image_path, output_path, max_duration, encoder):
         cmd = [
             self.ffmpeg, '-y',
             '-hide_banner', '-loglevel', 'error',
-        ]
-
-        # 静态图片输入（尤其 jpg/jpeg）在部分环境下配合 -hwaccel 会失败；
-        # 这里统一使用软件解码图片，仅使用 GPU 编码器进行编码。
-        
-        # 添加输入参数
-        cmd.extend([
             '-loop', '1',
             '-framerate', str(self.fps),
             '-i', str(image_path),
-        ])
-        
-        # 添加编码参数
-        cmd.extend([
+            '-c:v', encoder,
+            '-preset', self.preset,
+            '-pix_fmt', 'yuv420p',
+            '-g', '1',
+            '-t', str(max_duration),
+        ]
+        if self.gpu_type == "nvidia":
+            if self.video_codec == "h264":
+                cmd.extend(['-rc', 'vbr', '-cq', '23', '-maxrate', '10M', '-bufsize', '10M'])
+            else:
+                cmd.extend(['-rc', 'vbr', '-cq', '28', '-maxrate', '10M', '-bufsize', '10M'])
+        elif self.gpu_type == "amd":
+            cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
+        elif self.gpu_type == "intel":
+            cmd.extend(['-look_ahead', '0'])
+        cmd.append(str(output_path))
+        return cmd
+
+    def _build_single_video_command(self, image_path, output_path, duration, encoder):
+        cmd = [
+            self.ffmpeg, '-y',
+            '-hide_banner', '-loglevel', 'error',
+            '-loop', '1',
+            '-framerate', str(self.fps),
+            '-i', str(image_path),
             '-c:v', encoder,
             '-preset', self.preset,
             '-pix_fmt', 'yuv420p',
             '-t', str(duration),
-        ])
-        
-        # 添加特定GPU的优化参数
+        ]
         if self.gpu_type == "nvidia":
-            # NVIDIA 特定参数
             if self.video_codec == "h264":
-                cmd.extend(['-rc', 'vbr', '-cq', '23', '-b:v', '0'])
-            elif self.video_codec == "h265":
-                cmd.extend(['-rc', 'vbr', '-cq', '28', '-b:v', '0'])
+                cmd.extend(['-rc', 'vbr', '-cq', '23', '-maxrate', '10M', '-bufsize', '10M'])
+            else:
+                cmd.extend(['-rc', 'vbr', '-cq', '28', '-maxrate', '10M', '-bufsize', '10M'])
         elif self.gpu_type == "amd":
-            # AMD 特定参数
-            if self.video_codec == "h264":
-                cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
-            elif self.video_codec == "h265":
-                cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
+            cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
         elif self.gpu_type == "intel":
-            # Intel 特定参数
             cmd.extend(['-look_ahead', '0'])
-        
-        # 输出文件
-        cmd.append(str(temp_video))
-        
+        cmd.append(str(output_path))
         return cmd
+
+    def _trim_video(self, reference_video, output_path, duration):
+        cmd = [
+            self.ffmpeg, '-y',
+            '-hide_banner', '-loglevel', 'error',
+            '-ss', '0',
+            '-t', str(duration),
+            '-i', str(reference_video),
+            '-c', 'copy',
+            '-avoid_negative_ts', '1',
+            str(output_path)
+        ]
+        rc, _, _ = run_quiet(cmd, capture=False)
+        return rc == 0 and output_path.exists()
+
+    def _process_one_file(self, audio_file, info, reference_video, use_fallback):
+        self._log(f"处理：{audio_file.name}")
+        try:
+            audio_suffix = audio_file.suffix.lower()
+
+            # 0) 非 FLAC/WAV 先转换为 FLAC
+            if audio_suffix not in (".flac", ".wav", ".wave"):
+                converted = self._convert_to_flac(audio_file, self._temp_dir)
+                if converted is None:
+                    return False
+                audio_input = converted
+            else:
+                audio_input = audio_file
+
+            # 1) 判断是否需要重采样（已经是 FLAC 且匹配目标格式则跳过）
+            is_flac_at_target = (
+                info['codec_name'] == 'flac'
+                and info['sample_rate'] == self.sample_rate
+                and info['bits_per_sample'] == self.bit_depth
+            )
+            if is_flac_at_target:
+                audio_for_mux = audio_input
+                self._log("  音频已是目标格式，跳过重采样")
+            else:
+                resampled = self._temp_dir / (audio_file.stem + "_resampled.flac")
+                self._log(f"  正在重采样音频 -> {self.sample_rate}kHz {self.bit_depth}bit ...")
+                if not self._resample_audio(audio_input, resampled):
+                    return False
+                audio_for_mux = resampled
+
+            # 2) 视频：优先从基准视频裁剪，否则逐文件编码
+            temp_video = self._temp_dir / (audio_file.stem + "_video.mp4")
+            if reference_video and not use_fallback:
+                self._log("  正在裁剪视频轨（无需重新编码）...")
+                if not self._trim_video(reference_video, temp_video, info['duration']):
+                    self._log("  裁剪失败，回退到直接编码")
+                    reference_video = None
+            if not reference_video or use_fallback:
+                self._log(f"  正在生成视频轨（{self.video_codec.upper()}）...")
+                cmd_v = self._build_single_video_command(self.image_path, temp_video, info['duration'], self._encoder_name)
+                rc, _, _ = run_quiet(cmd_v, capture=False)
+                if rc != 0 or not temp_video.exists():
+                    self._log("  视频生成失败")
+                    return False
+                self._log("  视频生成成功")
+            else:
+                self._log("  视频裁剪成功")
+
+            # 3) 封装到 MKV
+            out_mkv = self.output_dir / (audio_file.stem + ".mkv")
+            cmd_mux = [
+                self.ffmpeg, '-y',
+                '-hide_banner', '-loglevel', 'error',
+                '-i', str(temp_video),
+                '-i', str(audio_for_mux),
+                '-map', '0:v',
+                '-map', '1:a',
+                '-c:v', 'copy',
+                '-c:a', 'copy',
+                '-disposition:a:0', 'default',
+                str(out_mkv)
+            ]
+            self._log("  正在封装到 MKV ...")
+            rc, _, _ = run_quiet(cmd_mux, capture=False)
+            if rc != 0 or not out_mkv.exists():
+                rc2, outb2, errb2 = run_quiet(cmd_mux, capture=True)
+                err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
+                self._log(f"  封装失败: {err.strip()[:500]}")
+                return False
+
+            self._log(f"  ✓ 已生成：{out_mkv.name}")
+            return True
+
+        except Exception as e:
+            self._log(f"  {audio_file.name} 异常: {e}")
+            self._log(f"  {traceback.format_exc()[:500]}")
+            return False
 
     def run(self):
         files = self._get_audio_files()
-        
         if not files:
             self._log("未找到支持的音频文件（请检查所选文件类型和文件夹路径）。")
             self.finished.emit(0, 0)
@@ -310,181 +420,99 @@ class Worker(QThread):
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         total = len(files)
-        succ = 0
-        
-        # 获取编码器设置
-        encoder, extra_params = self._get_gpu_encoder_settings()
-        self._log(f"使用编码器: {encoder} ({self.gpu_type.upper()})")
-        self._log(f"预设: {self.preset}")
-        
-        sample_fmt = self._get_sample_format(self.bit_depth)
-        
-        for idx, audio_file in enumerate(files, start=1):
+
+        self._temp_dir = Path(tempfile.mkdtemp(prefix="flac2mkv_"))
+
+        encoder, _ = self._get_gpu_encoder_settings()
+        self._encoder_name = encoder
+
+        # ==== Phase 1: 扫描所有音频 ====
+        self._log("=== 阶段 1/4: 扫描音频文件信息 ===")
+        audio_infos = []
+        max_duration = 0.0
+        for i, f in enumerate(files):
             try:
-                self._log(f"[{idx}/{total}] 处理：{audio_file.name} ({audio_file.suffix})")
-                
-                # 获取文件时长
-                try:
-                    duration = ffprobe_duration_seconds(audio_file, ffprobe_bin=self.ffprobe)
-                except Exception as e:
-                    self._log(f"  无法读取时长，跳过：{e}")
-                    continue
-
-                if duration <= 0:
-                    self._log("  时长 <=0，跳过")
-                    continue
-
-                if not ffprobe_has_audio(audio_file, ffprobe_bin=self.ffprobe):
-                    self._log("  未检测到音频流，跳过")
-                    continue
-
-                self._log(f"  时长：{duration:.2f}s")
-
-                # 准备临时文件
-                with tempfile.TemporaryDirectory() as td:
-                    td = Path(td)
-
-                    # 0) 格式检测：非 FLAC/WAV 先转换为 FLAC
-                    audio_suffix = audio_file.suffix.lower()
-                    needs_conversion = audio_suffix not in (".flac", ".wav", ".wave")
-                    if needs_conversion:
-                        converted = self._convert_to_flac(audio_file, td)
-                        if converted is None:
-                            continue
-                        audio_input = converted
-                        self._log(f"  转换后文件: {converted.name}")
-                    else:
-                        audio_input = audio_file
-
-                    # 重采样后的FLAC路径
-                    resampled = td / (audio_file.stem + f"_{self.sample_rate}k{self.bit_depth}bit.flac")
-                    # 临时视频
-                    temp_video = td / (audio_file.stem + "_video.mp4")
-                    out_mkv = self.output_dir / (audio_file.stem + ".mkv")
-
-                    # 1) 重采样音频 -> 指定采样率和位深的FLAC
-                    self._log(f"  正在重采样音频 -> {self.sample_rate}kHz {self.bit_depth}-bit FLAC ...")
-
-                    # 构建ffmpeg命令（使用 audio_input：原始文件或转换后的FLAC）
-                    cmd_resample = [
-                        self.ffmpeg, '-y',
-                        '-hide_banner', '-loglevel', 'error',
-                        '-i', str(audio_input),
-                    ]
-                    
-                    # 添加音频过滤器
-                    cmd_resample.extend([
-                        '-af', f'aresample={self.sample_rate}',
-                        '-sample_fmt', sample_fmt,
-                        '-bits_per_raw_sample', str(self.bit_depth),
-                        str(resampled)
-                    ])
-                    
-                    rc, _, _ = run_quiet(cmd_resample, capture=False)
-                    if rc != 0 or not resampled.exists():
-                        # 捕获错误信息用于诊断
-                        self._log("  重采样失败，尝试捕获错误信息...")
-                        rc2, outb2, errb2 = run_quiet(cmd_resample, capture=True)
-                        err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
-                        self._log(f"  重采样失败 stderr 摘要:\n{err.strip()[:2000]}")
-                        continue
-                    self._log("  重采样成功")
-
-                    # 2) 从图片生成静态视频（使用GPU加速）
-                    cmd_video = self._build_video_command(
-                        self.image_path, temp_video, duration, encoder, extra_params
-                    )
-                    
-                    self._log(f"  正在生成静态视频轨（{self.video_codec.upper()}，使用{self.gpu_type.upper()} GPU加速）...")
-                    rc, _, _ = run_quiet(cmd_video, capture=False)
-                    if rc != 0 or not temp_video.exists():
-                        self._log("  生成视频失败，尝试捕获错误信息...")
-                        rc2, outb2, errb2 = run_quiet(cmd_video, capture=True)
-                        err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
-                        self._log(f"  生成视频失败 stderr 摘要:\n{err.strip()[:2000]}")
-
-                        # 可选兜底：JPG/JPEG 失败时，先转临时 PNG 再重试
-                        image_for_retry = self.image_path
-                        if (
-                            self.auto_jpg_to_png_fallback
-                            and self.image_path.suffix.lower() in {".jpg", ".jpeg"}
-                        ):
-                            temp_png = td / (self.image_path.stem + "_fallback.png")
-                            self._log("  检测到 JPG/JPEG，尝试转为临时 PNG 后重试...")
-                            cmd_to_png = [
-                                self.ffmpeg, '-y',
-                                '-hide_banner', '-loglevel', 'error',
-                                '-i', str(self.image_path),
-                                '-frames:v', '1',
-                                str(temp_png)
-                            ]
-                            rc_png, _, _ = run_quiet(cmd_to_png, capture=False)
-                            if rc_png == 0 and temp_png.exists():
-                                image_for_retry = temp_png
-                                cmd_video = self._build_video_command(
-                                    image_for_retry, temp_video, duration, encoder, extra_params
-                                )
-                                rc_retry, _, _ = run_quiet(cmd_video, capture=False)
-                                if rc_retry == 0 and temp_video.exists():
-                                    self._log("  JPG->PNG 兜底重试成功")
-                                else:
-                                    self._log("  JPG->PNG 兜底重试失败")
-                            else:
-                                self._log("  JPG->PNG 转换失败，跳过此兜底流程")
-
-                        # 如果仍失败且当前在用GPU编码，尝试回退到CPU编码
-                        if not temp_video.exists():
-                            if self.gpu_type != "cpu":
-                                self._log("  GPU编码失败，尝试回退到CPU编码...")
-                                cpu_encoder, _ = self._get_gpu_encoder_settings()
-                                cpu_encoder = GPU_ENCODERS["cpu"].get(self.video_codec, "libx264")
-                                cmd_video_cpu = self._build_video_command(
-                                    image_for_retry, temp_video, duration, cpu_encoder, []
-                                )
-                                rc2, _, _ = run_quiet(cmd_video_cpu, capture=False)
-                                if rc2 == 0 and temp_video.exists():
-                                    self._log("  CPU编码成功")
-                                else:
-                                    continue
-                            else:
-                                continue
-                    self._log("  静态视频生成成功")
-
-                    # 3) 混合视频 + 音频到MKV
-                    cmd_mux = [
-                        self.ffmpeg, '-y',
-                        '-hide_banner', '-loglevel', 'error',
-                        '-i', str(temp_video),
-                        '-i', str(resampled),
-                        '-map', '0:v',
-                        '-map', '1:a',
-                        '-c:v', 'copy',
-                        '-c:a', 'copy',
-                        '-disposition:a:0', 'default',
-                        str(out_mkv)
-                    ]
-                    self._log("  正在封装到 MKV（不转码音频，直接 copy FLAC）...")
-                    rc, _, _ = run_quiet(cmd_mux, capture=False)
-                    if rc != 0 or not out_mkv.exists():
-                        self._log("  封装失败，尝试捕获错误信息...")
-                        rc2, outb2, errb2 = run_quiet(cmd_mux, capture=True)
-                        err = errb2.decode('utf-8', errors='ignore') if errb2 else "(no stderr)"
-                        self._log(f"  封装失败 stderr 摘要:\n{err.strip()[:2000]}")
-                        continue
-
-                    # 成功
-                    self._log(f"  ✓ 已生成：{out_mkv.name}")
-                    succ += 1
-
-                # 更新进度
-                self.progress.emit(int(idx / total * 100))
-
+                info = self._get_audio_info(f)
+                if info['has_audio'] and info['duration'] > 0:
+                    if info['duration'] > max_duration:
+                        max_duration = info['duration']
+                    audio_infos.append((f, info))
+                else:
+                    self._log(f"  跳过（无音频或时长为0）：{f.name}")
             except Exception as e:
-                self._log(f"  处理异常: {e}")
-                import traceback
-                self._log(f"  异常详情: {traceback.format_exc()}")
+                self._log(f"  读取失败：{f.name} - {e}")
+            self.progress.emit(int((i + 1) / total * 5))
 
-        self.finished.emit(succ, total)
+        self._log(f"  有效音频: {len(audio_infos)}/{total}, 最长时长: {max_duration:.1f}s")
+        if not audio_infos:
+            self._log("没有有效的音频文件。")
+            self._cleanup()
+            self.finished.emit(0, 0)
+            return
+
+        # ==== Phase 1.5: 预转换 JPG -> PNG ====
+        image_path = self.image_path
+        if (self.auto_jpg_to_png_fallback
+                and image_path.suffix.lower() in {".jpg", ".jpeg"}):
+            self._log("=== 阶段 1.5/4: 转换 JPG -> PNG ===")
+            temp_png = self._temp_dir / "image_fallback.png"
+            cmd = [
+                self.ffmpeg, '-y',
+                '-hide_banner', '-loglevel', 'error',
+                '-i', str(image_path),
+                '-frames:v', '1',
+                str(temp_png)
+            ]
+            rc, _, _ = run_quiet(cmd, capture=False)
+            if rc == 0 and temp_png.exists():
+                image_path = temp_png
+                self._log("  JPG -> PNG 转换成功")
+            else:
+                self._log("  JPG -> PNG 转换失败，使用原始图片")
+
+        # ==== Phase 2: 生成基准视频 ====
+        self._log("=== 阶段 2/4: 生成基准视频（GPU加速，用于所有文件裁剪） ===")
+        self._log(f"  编码器: {encoder}, 预设: {self.preset}")
+        ref_duration = max_duration + 1.0
+        reference_video = self._temp_dir / "reference_video.mp4"
+        cmd_ref = self._build_reference_video_command(image_path, reference_video, ref_duration, encoder)
+        rc, _, _ = run_quiet(cmd_ref, capture=False)
+        use_fallback = (rc != 0 or not reference_video.exists())
+        if use_fallback:
+            self._log("  基准视频生成失败，降级到逐文件编码模式")
+        else:
+            self._log(f"  基准视频生成成功（{ref_duration:.1f}s）")
+        self.progress.emit(10)
+
+        # ==== Phase 3: 并行处理 ====
+        mode_label = "降级模式" if use_fallback else f"{self.max_workers} 路并发"
+        self._log(f"=== 阶段 3/4: 处理文件（{mode_label}） ===")
+
+        completed = 0
+        succ = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {
+                executor.submit(self._process_one_file, f, info, reference_video, use_fallback): f.name
+                for f, info in audio_infos
+            }
+            for future in concurrent.futures.as_completed(futures):
+                name = futures[future]
+                completed += 1
+                try:
+                    if future.result():
+                        succ += 1
+                except Exception as e:
+                    self._log(f"  {name} 线程异常: {e}")
+                self.progress.emit(10 + int(completed / len(audio_infos) * 90))
+
+        self._cleanup()
+        self._log(f"\n全部完成：成功 {succ} / {len(audio_infos)}")
+        self.finished.emit(succ, len(audio_infos))
+
+    def _cleanup(self):
+        if self._temp_dir and self._temp_dir.exists():
+            shutil.rmtree(self._temp_dir, ignore_errors=True)
+            self._temp_dir = None
 
 # -------------------------
 # GUI
@@ -503,6 +531,7 @@ class MainWindow(QMainWindow):
         self.video_codec = cfg.get('video_codec', 'h264')
         self.preset = cfg.get('preset', 'medium')
         self.auto_jpg_to_png_fallback = cfg.get('auto_jpg_to_png_fallback', True)
+        self.max_workers = cfg.get('max_workers', 2)
 
         self.image_path = ""
         self.folder_path = ""
@@ -581,13 +610,19 @@ class MainWindow(QMainWindow):
         h2.addStretch()
         gv.addLayout(h2)
         
-        # 帧率
+        # 帧率 + 并行数
         h3 = QHBoxLayout()
         h3.addWidget(QLabel("视频帧率:"))
         self.fps_spin = QComboBox()
         self.fps_spin.addItems(["1", "5", "10", "15", "24", "25", "30", "50", "60"])
         self.fps_spin.setCurrentText("1")
         h3.addWidget(self.fps_spin)
+        h3.addSpacing(20)
+        h3.addWidget(QLabel("并行任务数:"))
+        self.workers_spin = QComboBox()
+        self.workers_spin.addItems(["1", "2", "3", "4", "6", "8"])
+        self.workers_spin.setCurrentText(str(self.max_workers))
+        h3.addWidget(self.workers_spin)
         h3.addStretch()
         gv.addLayout(h3)
         
@@ -850,6 +885,7 @@ class MainWindow(QMainWindow):
         cfg['video_codec'] = self.video_codec
         cfg['preset'] = self.preset_combo.currentText()
         cfg['auto_jpg_to_png_fallback'] = self.jpg_fallback_check.isChecked()
+        cfg['max_workers'] = int(self.workers_spin.currentText())
         save_config(cfg)
         
         # 显示处理信息
@@ -858,6 +894,7 @@ class MainWindow(QMainWindow):
         self.log(f"GPU加速: {self.gpu_type.upper()}")
         self.log(f"视频编码: {self.video_codec.upper()}")
         self.log(f"编码预设: {self.preset_combo.currentText()}")
+        self.log(f"并行任务数: {self.workers_spin.currentText()}")
         self.log(f"JPG失败兜底转PNG: {'开启' if self.jpg_fallback_check.isChecked() else '关闭'}")
         self.log(f"采样率: {self.sample_rate_combo.currentText()} Hz")
         self.log(f"位深度: {self.bit_depth_combo.currentText()} bit")
@@ -880,7 +917,8 @@ class MainWindow(QMainWindow):
             gpu_type=self.gpu_type,
             video_codec=self.video_codec,
             preset=self.preset_combo.currentText(),
-            auto_jpg_to_png_fallback=self.jpg_fallback_check.isChecked()
+            auto_jpg_to_png_fallback=self.jpg_fallback_check.isChecked(),
+            max_workers=int(self.workers_spin.currentText())
         )
         self.worker.log.connect(self.log)
         self.worker.progress.connect(self.progress.setValue)
