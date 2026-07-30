@@ -280,14 +280,13 @@ class Worker(QThread):
             '-c:v', encoder,
             '-preset', self.preset,
             '-pix_fmt', 'yuv420p',
-            '-g', '1',
             '-t', str(max_duration),
         ]
         if self.gpu_type == "nvidia":
             if self.video_codec == "h264":
-                cmd.extend(['-rc', 'vbr', '-cq', '23', '-maxrate', '10M', '-bufsize', '10M'])
+                cmd.extend(['-rc', 'vbr', '-cq', '23', '-b:v', '0'])
             else:
-                cmd.extend(['-rc', 'vbr', '-cq', '28', '-maxrate', '10M', '-bufsize', '10M'])
+                cmd.extend(['-rc', 'vbr', '-cq', '28', '-b:v', '0'])
         elif self.gpu_type == "amd":
             cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
         elif self.gpu_type == "intel":
@@ -309,9 +308,9 @@ class Worker(QThread):
         ]
         if self.gpu_type == "nvidia":
             if self.video_codec == "h264":
-                cmd.extend(['-rc', 'vbr', '-cq', '23', '-maxrate', '10M', '-bufsize', '10M'])
+                cmd.extend(['-rc', 'vbr', '-cq', '23', '-b:v', '0'])
             else:
-                cmd.extend(['-rc', 'vbr', '-cq', '28', '-maxrate', '10M', '-bufsize', '10M'])
+                cmd.extend(['-rc', 'vbr', '-cq', '28', '-b:v', '0'])
         elif self.gpu_type == "amd":
             cmd.extend(['-usage', 'transcoding', '-quality', 'balanced'])
         elif self.gpu_type == "intel":
@@ -480,6 +479,9 @@ class Worker(QThread):
         use_fallback = (rc != 0 or not reference_video.exists())
         if use_fallback:
             self._log("  基准视频生成失败，降级到逐文件编码模式")
+            _, outb, errb = run_quiet(cmd_ref, capture=True)
+            err = errb.decode('utf-8', errors='ignore') if errb else "(no stderr)"
+            self._log(f"  stderr: {err.strip()[:500]}")
         else:
             self._log(f"  基准视频生成成功（{ref_duration:.1f}s）")
         self.progress.emit(10)
