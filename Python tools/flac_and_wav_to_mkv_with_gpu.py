@@ -21,6 +21,7 @@ Requirements:
 import sys
 import os
 import json
+import math
 import shutil
 import tempfile
 import subprocess
@@ -280,6 +281,7 @@ class Worker(QThread):
             '-c:v', encoder,
             '-preset', self.preset,
             '-pix_fmt', 'yuv420p',
+            '-r', str(self.fps),
             '-t', str(max_duration),
         ]
         if self.gpu_type == "nvidia":
@@ -304,6 +306,7 @@ class Worker(QThread):
             '-c:v', encoder,
             '-preset', self.preset,
             '-pix_fmt', 'yuv420p',
+            '-r', str(self.fps),
             '-t', str(duration),
         ]
         if self.gpu_type == "nvidia":
@@ -319,14 +322,15 @@ class Worker(QThread):
         return cmd
 
     def _trim_video(self, reference_video, output_path, duration):
+        frames_needed = math.ceil(duration * self.fps)
         cmd = [
             self.ffmpeg, '-y',
             '-hide_banner', '-loglevel', 'error',
             '-ss', '0',
-            '-t', str(duration),
             '-i', str(reference_video),
             '-c', 'copy',
             '-avoid_negative_ts', '1',
+            '-frames:v', str(frames_needed),
             str(output_path)
         ]
         rc, _, _ = run_quiet(cmd, capture=False)
@@ -391,6 +395,7 @@ class Worker(QThread):
                 '-map', '1:a',
                 '-c:v', 'copy',
                 '-c:a', 'copy',
+                '-shortest',
                 '-disposition:a:0', 'default',
                 str(out_mkv)
             ]
