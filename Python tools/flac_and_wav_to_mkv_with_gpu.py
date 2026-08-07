@@ -454,8 +454,28 @@ class Worker(QThread):
             self.finished.emit(0, 0)
             return
 
-        # ==== Phase 1.5: 预转换 JPG -> PNG ====
+        # ==== Phase 1.5: 预转换图片 ====
         image_path = self.image_path
+
+        # 无条件转换 WEBP -> PNG
+        if image_path.suffix.lower() == ".webp":
+            self._log("=== 阶段 1.5/4: 转换 WEBP -> PNG ===")
+            temp_png = self._temp_dir / "image_webp_to_png.png"
+            cmd = [
+                self.ffmpeg, '-y',
+                '-hide_banner', '-loglevel', 'error',
+                '-i', str(image_path),
+                '-frames:v', '1',
+                str(temp_png)
+            ]
+            rc, _, _ = run_quiet(cmd, capture=False)
+            if rc == 0 and temp_png.exists():
+                image_path = temp_png
+                self._log("  WEBP -> PNG 转换成功")
+            else:
+                self._log("  WEBP -> PNG 转换失败，使用原始图片")
+
+        # JPG 兜底转 PNG
         if (self.auto_jpg_to_png_fallback
                 and image_path.suffix.lower() in {".jpg", ".jpeg"}):
             self._log("=== 阶段 1.5/4: 转换 JPG -> PNG ===")
