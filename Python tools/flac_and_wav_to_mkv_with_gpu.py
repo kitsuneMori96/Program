@@ -863,6 +863,9 @@ class MainWindow(QMainWindow):
         if f:
             self.image_path = str(Path(f).resolve())
             self.lbl_img.setText(Path(self.image_path).name)
+            # 自动把图片所在文件夹填为音乐文件夹，省去再次选择
+            self.folder_path = str(Path(self.image_path).parent)
+            self.lbl_folder.setText(self.folder_path)
             pix = QPixmap(self.image_path)
             if not pix.isNull():
                 pix = pix.scaled(self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
